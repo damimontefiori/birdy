@@ -1,0 +1,19 @@
+{
+  "name": "Cuaderno de Aves — Álbum Naturalista",
+  "short_name": "Cuaderno Aves",
+  "description": "Cuaderno de campo naturalista, artístico y artesanal para descubrir, identificar y registrar aves.",
+  "lang": "es-AR",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F3E8",
+  "theme_color": "#3A5A40",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/plates/acuarela_hornero.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}

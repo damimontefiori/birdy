@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Reglas privadas para cuadernos, láminas y avistamientos de la usuaria autenticada
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Proyecciones públicas sanitizadas de cuadernos compartidos (estrictamente de solo lectura y solo si no fueron revocados)
+    match /public_shared_notebooks/{shareToken} {
+      allow get: if resource.data.isEnabled == true
+                 && resource.data.revokedAt == null
+                 && resource.data.shareToken == shareToken;
+      allow list: if false; // Impedir enumerar enlaces compartidos
+      allow create, update, delete: if request.auth != null
+                                    && request.auth.uid == request.resource.data.ownerUid;
+    }
+  }
+}
