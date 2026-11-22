@@ -54,13 +54,18 @@ npm run build        # build de producción en dist/
 npm run preview      # servir el build localmente (con endpoints /api/* activos)
 ```
 
-### Configuración de IA (Google Gemini)
+### Configuración de IA (Google Gemini) y Acceso con Google
 
-Copiá [`.env.example`](.env.example) a `.env` y agregá tu clave de [Google AI Studio](https://aistudio.google.com/apikey):
+Copiá [`.env.example`](.env.example) a `.env` y agregá:
 
 ```bash
-# Clave de servidor (nunca lleva prefijo VITE_ ni se expone al navegador)
+# Clave de servidor de Gemini (https://aistudio.google.com/apikey)
 GEMINI_API_KEY=tu_clave_aqui
+
+# Autenticación real con Google (protege la cuota de Gemini en producción)
+GOOGLE_CLIENT_ID=tu_client_id.apps.googleusercontent.com
+ALLOWED_EMAILS=valedepadua@gmail.com,damiyvale@gmail.com
+AUTH_SESSION_SECRET=una_clave_aleatoria_larga_de_al_menos_32_caracteres
 
 # Opcional: Firebase (respaldo real con cuenta de Google)
 VITE_FIREBASE_API_KEY=
@@ -74,7 +79,7 @@ VITE_FIREBASE_APP_ID=
 VITE_BACKEND_API_URL=
 ```
 
-> 🔒 `GEMINI_API_KEY` vive **solo en el servidor**, nunca en el cliente. Podés agregarla al archivo `.env` incluso con el servidor en marcha y se detecta automáticamente.
+> 🔒 `GEMINI_API_KEY` y `AUTH_SESSION_SECRET` viven **solo en el servidor**, nunca en el cliente. Cuando `GOOGLE_CLIENT_ID` está configurado (y siempre en producción), `/api/identify-bird` y `/api/generate-illustration` exigen una sesión verificada con Google perteneciente a `ALLOWED_EMAILS`.
 
 ## Estructura del proyecto
 

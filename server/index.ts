@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { handleBirdyApiRequest } from './apiPlugin.ts';
+import { getAuthConfigStatus } from './authService.ts';
 import { resolveServerEnv } from './secureAiProxy.ts';
 
 const port = Number(process.env.PORT || 8787);
@@ -82,9 +83,14 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, host, () => {
   const env = resolveServerEnv();
+  const auth = getAuthConfigStatus(env);
   console.log(
-    `[Birdy Producción] Escuchando en http://${host}:${port} · Gemini configurado: ${
-      env.GEMINI_API_KEY ? 'SÍ' : 'NO (configurá GEMINI_API_KEY en .env)'
+    `[Birdy Producción] Escuchando en http://${host}:${port} · Gemini: ${
+      env.GEMINI_API_KEY ? 'SÍ' : 'NO'
+    } · Google Auth: ${
+      auth.googleAuthConfigured
+        ? `ACTIVO (${auth.allowedEmailsCount} cuentas autorizadas)`
+        : 'SIN CONFIGURAR (agregá GOOGLE_CLIENT_ID)'
     }`
   );
 });

@@ -56,6 +56,12 @@ export interface BackendAiHealth {
   provider: string;
   visionModel?: string;
   imageModel?: string;
+  auth?: {
+    googleAuthConfigured: boolean;
+    authRequired: boolean;
+    googleClientId: string | null;
+    allowedEmailsCount: number;
+  };
 }
 
 // Caché idempotente por hash SHA-256 para evitar consumos duplicados por reintentos accidentales
@@ -97,7 +103,9 @@ export async function checkBackendAiHealth(): Promise<BackendAiHealth> {
     return { ok: false, aiConfigured: false, provider: 'gemini' };
   }
   try {
-    const res = await fetch(`${getApiBase()}/api/health`);
+    const res = await fetch(`${getApiBase()}/api/health`, {
+      credentials: 'include',
+    });
     if (res.ok) {
       const data = (await res.json()) as BackendAiHealth;
       cachedAiConfigured = Boolean(data.aiConfigured);
@@ -216,6 +224,7 @@ export async function identifyBirdFromPhoto(
     try {
       const res = await fetch(`${getApiBase()}/api/identify-bird`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sanitizedPhotoDataUrl: req.sanitizedPhotoDataUrl,
@@ -253,6 +262,42 @@ export async function identifyBirdFromPhoto(
         message?: string;
         detail?: string;
       };
+
+      if (res.status === 401 || res.status === 403) {
+        return {
+          status: 'error_procesamiento',
+          confidenceLevel: 'insuficiente',
+          proposedTaxonId: null,
+          candidates: [],
+          explanation:
+            errPayload.message ||
+            'Necesitás iniciar sesión con una cuenta de Google autorizada para usar la IA.',
+          uncertaintyReason:
+            'El acceso a Google Gemini está restringido a las cuentas habilitadas de Birdy.',
+          fromCache: false,
+          taxonomicSource: 'Acceso protegido con Google',
+          aiMode: 'error',
+          aiErrorMessage: errPayload.error || `HTTP ${res.status}`,
+        };
+      }
+
+      if (res.status === 503 && errPayload.error === 'AUTH_NOT_CONFIGURED') {
+        return {
+          status: 'error_procesamiento',
+          confidenceLevel: 'insuficiente',
+          proposedTaxonId: null,
+          candidates: [],
+          explanation:
+            errPayload.message ||
+            'Falta configurar GOOGLE_CLIENT_ID en el servidor para habilitar el acceso protegido a Gemini.',
+          uncertaintyReason:
+            'En producción la identificación con IA permanece bloqueada hasta configurar el acceso con Google.',
+          fromCache: false,
+          taxonomicSource: 'Configuración de seguridad pendiente',
+          aiMode: 'error',
+          aiErrorMessage: 'AUTH_NOT_CONFIGURED',
+        };
+      }
 
       if (res.status === 503 || errPayload.error === 'GEMINI_API_KEY_MISSING') {
         return {
@@ -617,6 +662,7 @@ export async function generateOrReuseIllustration(params: {
     try {
       const res = await fetch(`${getApiBase()}/api/generate-illustration`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           commonNameAr: species.commonNameAr,

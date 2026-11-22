@@ -12,6 +12,15 @@ import {
   exportFullBackupJson,
   importFullBackupJson,
 } from '../services/storageAndSyncService';
+import {
+  DEFAULT_ALLOWED_EMAILS,
+  getAuthenticatedUserFromRequest,
+  isAuthEnforced,
+  isEmailAllowed,
+  SESSION_COOKIE_NAME,
+  signSessionToken,
+  verifySessionToken,
+} from '../../server/authService';
 import { isAllowedImageProxyUrl } from '../../server/secureAiProxy';
 
 describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y visor ampliado', () => {
@@ -204,5 +213,75 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
     const restored = await importFullBackupJson(json);
     expect(restored.notebooks).toHaveLength(1);
     expect(restored.notebooks[0].title).toBe('Aves de mi jardín');
+  });
+
+  it('Restringe la autenticación de Google únicamente a valedepadua@gmail.com y damiyvale@gmail.com y valida cookies firmadas', () => {
+    expect(DEFAULT_ALLOWED_EMAILS).toEqual(['valedepadua@gmail.com', 'damiyvale@gmail.com']);
+
+    const env = {
+      GOOGLE_CLIENT_ID: '123456-test.apps.googleusercontent.com',
+      AUTH_SESSION_SECRET: 'super-secret-test-key-32-chars-minimum',
+    };
+
+    // Allowlist estricta (insensible a mayúsculas y espacios)
+    expect(isEmailAllowed('valedepadua@gmail.com', env)).toBe(true);
+    expect(isEmailAllowed('  DamiYVale@Gmail.com ', env)).toBe(true);
+    expect(isEmailAllowed('otra.persona@gmail.com', env)).toBe(false);
+    expect(isEmailAllowed('valedepadua@outlook.com', env)).toBe(false);
+    expect(isEmailAllowed('', env)).toBe(false);
+    expect(isAuthEnforced(env)).toBe(true);
+
+    // Firma y verificación de token de sesión HttpOnly
+    const validToken = signSessionToken(
+      {
+        uid: 'google_123',
+        email: 'valedepadua@gmail.com',
+        displayName: 'Valeria',
+      },
+      env
+    );
+    const verified = verifySessionToken(validToken, env);
+    expect(verified?.email).toBe('valedepadua@gmail.com');
+
+    // Rechazar token manipulado
+    const tampered = `${validToken.slice(0, -4)}AAAA`;
+    expect(verifySessionToken(tampered, env)).toBeNull();
+
+    // Rechazar token expirado
+    const expiredToken = signSessionToken(
+      {
+        uid: 'google_123',
+        email: 'valedepadua@gmail.com',
+        displayName: 'Valeria',
+      },
+      env,
+      -10
+    );
+    expect(verifySessionToken(expiredToken, env)).toBeNull();
+
+    // Validación de request con cookie HttpOnly: autorizada vs prohibida vs sin sesión
+    const okReq = {
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(validToken)}` },
+    } as never;
+    expect(getAuthenticatedUserFromRequest(okReq, env).status).toBe('ok');
+
+    const forbiddenToken = signSessionToken(
+      {
+        uid: 'google_999',
+        email: 'intruso@gmail.com',
+        displayName: 'Intruso',
+      },
+      env
+    );
+    const forbiddenReq = {
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(forbiddenToken)}` },
+    } as never;
+    expect(getAuthenticatedUserFromRequest(forbiddenReq, env)).toEqual({
+      status: 'forbidden',
+      email: 'intruso@gmail.com',
+    });
+
+    const anonReq = { headers: {} } as never;
+    expect(getAuthenticatedUserFromRequest(anonReq, env).status).toBe('unauthenticated');
   });
 });

@@ -65,6 +65,10 @@ export interface ServerEnv {
   GEMINI_VISION_MODEL?: string;
   GEMINI_IMAGE_MODEL?: string;
   EBIRD_API_KEY?: string;
+  GOOGLE_CLIENT_ID?: string;
+  ALLOWED_EMAILS?: string;
+  AUTH_SESSION_SECRET?: string;
+  REQUIRE_GOOGLE_AUTH?: string;
 }
 
 export interface ReferencePhotoDTO {
@@ -137,6 +141,20 @@ export function resolveServerEnv(cwd: string = process.cwd()): ServerEnv {
     GEMINI_IMAGE_MODEL:
       (process.env.GEMINI_IMAGE_MODEL || fileVars.GEMINI_IMAGE_MODEL || '').trim() || undefined,
     EBIRD_API_KEY: (process.env.EBIRD_API_KEY || fileVars.EBIRD_API_KEY || '').trim() || undefined,
+    GOOGLE_CLIENT_ID:
+      (
+        process.env.GOOGLE_CLIENT_ID ||
+        fileVars.GOOGLE_CLIENT_ID ||
+        process.env.VITE_GOOGLE_CLIENT_ID ||
+        fileVars.VITE_GOOGLE_CLIENT_ID ||
+        ''
+      ).trim() || undefined,
+    ALLOWED_EMAILS:
+      (process.env.ALLOWED_EMAILS || fileVars.ALLOWED_EMAILS || '').trim() || undefined,
+    AUTH_SESSION_SECRET:
+      (process.env.AUTH_SESSION_SECRET || fileVars.AUTH_SESSION_SECRET || '').trim() || undefined,
+    REQUIRE_GOOGLE_AUTH:
+      (process.env.REQUIRE_GOOGLE_AUTH || fileVars.REQUIRE_GOOGLE_AUTH || '').trim() || undefined,
   };
 }
 

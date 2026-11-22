@@ -19,6 +19,7 @@ import {
   Globe,
   HelpCircle,
   Loader2,
+  LogOut,
   MapPin,
   Plus,
   RefreshCw,
@@ -36,6 +37,7 @@ import {
   X,
   ZoomIn,
 } from 'lucide-react';
+import { GoogleSignInButton } from './components/GoogleSignInButton';
 import { ImageLightbox, LightboxItem } from './components/ImageLightbox';
 import { PublicNotebookView } from './components/PublicNotebookView';
 import { ShareNotebookModal } from './components/ShareNotebookModal';
@@ -58,6 +60,11 @@ import {
   IdentificationResponse,
   identifyBirdFromPhoto,
 } from './services/aiBirdService';
+import {
+  fetchCurrentAuthSession,
+  logoutServerSession,
+  ServerAuthStatus,
+} from './services/authClientService';
 import {
   computeBlobSha256,
   extractExifSuggestions,
@@ -148,11 +155,27 @@ export const App: React.FC = () => {
     return 'library';
   });
 
-  // Estado de conectividad y backend IA
+  // Estado de conectividad, autenticación Google real y backend IA
   const [isOnline, setIsOnline] = useState<boolean>(() =>
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
   const [aiHealth, setAiHealth] = useState<BackendAiHealth | null>(null);
+  const [serverAuthStatus, setServerAuthStatus] = useState<ServerAuthStatus | null>(null);
+  const [authErrorMessage, setAuthErrorMessage] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const params = new URLSearchParams(window.location.search);
+    const err = params.get('auth_error');
+    const email = params.get('auth_email');
+    if (err === 'not_authorized') {
+      return email
+        ? `Acceso restringido: la cuenta ${email} no está autorizada para acceder a Birdy.`
+        : 'Acceso restringido: esta cuenta de Google no está autorizada para acceder a Birdy.';
+    }
+    if (err === 'csrf_failed' || err === 'invalid_token') {
+      return 'No pudimos verificar tu inicio de sesión con Google. Intentá nuevamente.';
+    }
+    return null;
+  });
   const [simulateUploadFailure, setSimulateUploadFailure] = useState<boolean>(false);
   const [reducedMotion, setReducedMotion] = useState<boolean>(
     Boolean(persisted.user?.reducedMotion)
@@ -513,15 +536,88 @@ export const App: React.FC = () => {
     }
   };
 
-  // Verificar estado del backend IA (Google Gemini)
+  // Verificar estado del backend IA (Google Gemini) y sesión Google real
   const refreshAiHealth = async () => {
     const status = await checkBackendAiHealth();
     setAiHealth(status);
+    if (status.auth) {
+      setServerAuthStatus(status.auth);
+    }
   };
 
   useEffect(() => {
     void refreshAiHealth();
   }, []);
+
+  // Sincronizar sesión real de Google (cookie HttpOnly) y limpiar parámetros ?auth_error=
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.location.search.includes('auth_error=')) {
+      window.history.replaceState(window.history.state, '', window.location.pathname);
+    }
+
+    let active = true;
+    void fetchCurrentAuthSession().then((session) => {
+      if (!active || !session) return;
+      setServerAuthStatus(session.auth);
+
+      if (session.authenticated && session.user) {
+        const verifiedUser: UserProfile = {
+          uid: session.user.uid,
+          displayName: session.user.displayName,
+          email: session.user.email,
+          photoURL: session.user.photoURL,
+          reducedMotion,
+        };
+        setAuthErrorMessage(null);
+        setPersisted((prev) => ({ ...prev, user: verifiedUser }));
+        setScreen((cur) => {
+          if (cur !== 'welcome') return cur;
+          return persisted.notebooks.length === 0 ? 'onboarding_first_notebook' : 'library';
+        });
+      } else if (session.auth.authRequired) {
+        // Si el servidor exige Google Auth real, exigir inicio de sesión con cuenta autorizada
+        setPersisted((prev) => (prev.user ? { ...prev, user: null } : prev));
+        setScreen('welcome');
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleAuthenticatedGoogleUser = (user: UserProfile) => {
+    const profile: UserProfile = {
+      ...user,
+      reducedMotion,
+    };
+    setAuthErrorMessage(null);
+    setPersisted((prev) => ({
+      ...prev,
+      user: profile,
+    }));
+    if (persisted.notebooks.length === 0) {
+      setNbTitle('Aves de mi jardín');
+      setNbType('jardin');
+      setNbStyle('acuarela_naturalista');
+      setNbLocation('Tigre, Buenos Aires');
+      setNbPeriod('Primavera 2026');
+      setNbDescription('Las aves que visitan el jardín de casa y la galería.');
+      setScreen('onboarding_first_notebook');
+    } else {
+      setActiveNotebookId(persisted.notebooks[0].id);
+      setScreen('library');
+    }
+    showToast(`¡Bienvenida, ${profile.displayName}!`);
+  };
+
+  const handleSignOut = async () => {
+    await logoutServerSession();
+    setPersisted((prev) => ({ ...prev, user: null }));
+    setScreen('welcome');
+    showToast('Sesión cerrada. Tus cuadernos siguen guardados en este dispositivo.');
+  };
 
   // Escuchar eventos reales de conexión del navegador
   useEffect(() => {
@@ -1625,24 +1721,65 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          <p style={{ color: 'var(--ink-secondary)', fontSize: '0.94rem', marginBottom: 20 }}>
+          <p style={{ color: 'var(--ink-secondary)', fontSize: '0.94rem', marginBottom: 18 }}>
             Descubrí qué especie fotografiaste, comparala con fotos reales sin salir de la app y
             transformá cada hallazgo en una lámina en <strong>acuarela</strong> o{' '}
             <strong>lápiz grafito</strong>.
           </p>
 
-          <button
-            type="button"
-            className="btn btn-primary"
-            style={{ width: '100%', maxWidth: 360, fontSize: '1rem', padding: '13px 22px' }}
-            onClick={handleGoogleSignIn}
-          >
-            <ShieldCheck size={19} /> Ingresar con mi cuenta de Google (Valeria)
-          </button>
+          {authErrorMessage && (
+            <div
+              className="callout-box terracotta"
+              role="alert"
+              style={{ marginBottom: 16, textAlign: 'left', fontSize: '0.86rem' }}
+            >
+              <div style={{ fontWeight: 700, color: '#8E3B24', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <AlertTriangle size={16} /> Acceso no autorizado
+              </div>
+              <div style={{ marginTop: 4 }}>{authErrorMessage}</div>
+            </div>
+          )}
 
-          <p style={{ fontSize: '0.78rem', color: 'var(--ink-muted)', marginTop: 12 }}>
-            Solo solicitamos el permiso mínimo para asociar y respaldar tus cuadernos en la nube.
-          </p>
+          {serverAuthStatus?.googleAuthConfigured && serverAuthStatus.googleClientId ? (
+            <div style={{ marginBottom: 10 }}>
+              <GoogleSignInButton
+                googleClientId={serverAuthStatus.googleClientId}
+                isStandalonePwa={isStandaloneApp}
+                onAuthenticated={handleAuthenticatedGoogleUser}
+                onAuthError={(msg) => setAuthErrorMessage(msg)}
+              />
+              <p style={{ fontSize: '0.78rem', color: 'var(--ink-muted)', marginTop: 12 }}>
+                Acceso privado limitado exclusivamente a las cuentas de Google autorizadas para
+                proteger la cuota de IA.
+              </p>
+            </div>
+          ) : serverAuthStatus?.authRequired ? (
+            <div className="callout-box warning" style={{ textAlign: 'left', fontSize: '0.86rem' }}>
+              <strong>Falta configurar GOOGLE_CLIENT_ID en el servidor</strong>
+              <p style={{ margin: '5px 0 0' }}>
+                En producción el acceso está protegido por defecto. Agregá{' '}
+                <code>GOOGLE_CLIENT_ID</code> en las variables de entorno del servidor para
+                habilitar el inicio de sesión con Google.
+              </p>
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ width: '100%', maxWidth: 360, fontSize: '1rem', padding: '13px 22px' }}
+                onClick={handleGoogleSignIn}
+              >
+                <ShieldCheck size={19} /> Ingresar con mi cuenta de Google (Valeria)
+              </button>
+
+              <p style={{ fontSize: '0.78rem', color: 'var(--ink-muted)', marginTop: 12 }}>
+                Solo solicitamos el permiso mínimo para asociar y respaldar tus cuadernos. En
+                producción agregá <code>GOOGLE_CLIENT_ID</code> para restringir el acceso a tus
+                cuentas de Google autorizadas.
+              </p>
+            </>
+          )}
         </div>
       </div>
     );
@@ -3427,13 +3564,38 @@ export const App: React.FC = () => {
       {screen === 'pending_center' && (
         <section className="notebook-page">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 10 }}>
-            <div>
-              <h2 className="serif-heading" style={{ fontSize: '1.85rem', margin: 0 }}>
-                Respaldo y ajustes
-              </h2>
-              <span style={{ fontSize: '0.84rem', color: 'var(--ink-secondary)' }}>
-                {persisted.user.email}
-              </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              {persisted.user.photoURL && (
+                <img
+                  src={persisted.user.photoURL}
+                  alt={persisted.user.displayName}
+                  referrerPolicy="no-referrer"
+                  style={{
+                    width: 42,
+                    height: 42,
+                    borderRadius: '999px',
+                    border: '2px solid var(--paper-edge)',
+                    objectFit: 'cover',
+                    flexShrink: 0,
+                  }}
+                />
+              )}
+              <div style={{ minWidth: 0 }}>
+                <h2 className="serif-heading" style={{ fontSize: '1.75rem', margin: 0, lineHeight: 1.1 }}>
+                  Respaldo y ajustes
+                </h2>
+                <span
+                  style={{
+                    fontSize: '0.82rem',
+                    color: 'var(--ink-secondary)',
+                    display: 'block',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}
+                >
+                  {persisted.user.email}
+                </span>
+              </div>
             </div>
             <button
               type="button"
@@ -3442,6 +3604,42 @@ export const App: React.FC = () => {
             >
               <ArrowLeft size={15} /> Cuadernos
             </button>
+          </div>
+
+          {/* Estado de protección con cuenta de Google autorizada */}
+          <div
+            className={`callout-box ${serverAuthStatus?.googleAuthConfigured ? '' : 'warning'}`}
+            style={{ marginBottom: 14 }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 7 }}>
+                <span
+                  className={`ai-status-dot ${
+                    serverAuthStatus?.googleAuthConfigured ? 'ready' : 'pending'
+                  }`}
+                />
+                Acceso protegido con Google
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-compact"
+                onClick={() => void handleSignOut()}
+              >
+                <LogOut size={13} /> Cerrar sesión
+              </button>
+            </div>
+            {serverAuthStatus?.googleAuthConfigured ? (
+              <p style={{ margin: '6px 0 0', fontSize: '0.83rem', color: 'var(--ink-secondary)' }}>
+                Activo · La cuota de Gemini está protegida en el servidor únicamente para las{' '}
+                {serverAuthStatus.allowedEmailsCount} cuentas de Google autorizadas.
+              </p>
+            ) : (
+              <p style={{ margin: '6px 0 0', fontSize: '0.83rem', color: '#5A4010' }}>
+                Modo local sin bloqueo de cuenta. Agregá <code>GOOGLE_CLIENT_ID</code> en{' '}
+                <code>.env</code> (o en tu hosting) para exigir Google Sign-In real restringido a
+                las cuentas autorizadas.
+              </p>
+            )}
           </div>
 
           {/* Estado del motor de IA (Google Gemini) */}
