@@ -1,19 +1,50 @@
 {
-  "name": "Cuaderno de Aves — Álbum Naturalista",
-  "short_name": "Cuaderno Aves",
-  "description": "Cuaderno de campo naturalista, artístico y artesanal para descubrir, identificar y registrar aves.",
+  "id": "/",
+  "name": "Birdy — Cuaderno de Aves",
+  "short_name": "Birdy",
+  "description": "Álbum naturalista personal para descubrir, identificar e ilustrar las aves de tu jardín y tus viajes.",
   "lang": "es-AR",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#F7F3E8",
-  "theme_color": "#3A5A40",
-  "orientation": "portrait-primary",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#F6F1E4",
+  "theme_color": "#38573E",
+  "orientation": "portrait",
+  "categories": ["lifestyle", "education", "photography"],
   "icons": [
     {
-      "src": "/plates/acuarela_hornero.jpg",
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
       "sizes": "512x512",
-      "type": "image/jpeg",
-      "purpose": "any maskable"
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Registrar ave",
+      "short_name": "Registrar",
+      "description": "Subir o sacar una foto para identificar un ave",
+      "url": "/?action=add",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
   ]
 }

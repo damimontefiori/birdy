@@ -1,4 +1,8 @@
-import { findSpeciesByTaxonId } from '../data/argentinaBirdsCatalog';
+import {
+  findSpeciesByTaxonId,
+  getCustomSpeciesList,
+  hydrateCustomSpecies,
+} from '../data/argentinaBirdsCatalog';
 import {
   Illustration,
   Notebook,
@@ -6,6 +10,7 @@ import {
   PublicNotebookProjection,
   PublicSanitizedSheet,
   Sighting,
+  SpeciesCatalogEntry,
   SyncStatus,
   UserProfile,
 } from '../types/domain';
@@ -24,6 +29,7 @@ export interface AppPersistedState {
   sheets: NotebookSpeciesSheet[];
   sightings: Sighting[];
   illustrations: Illustration[];
+  customSpecies?: SpeciesCatalogEntry[];
 }
 
 export interface CloudBackupPayload {
@@ -34,6 +40,7 @@ export interface CloudBackupPayload {
   sightings: Sighting[]; // Solo avistamientos confirmados como 'respaldado'
   illustrations: Illustration[];
   backedUpPhotos: Record<string, string>; // photoStorageKey -> sanitized DataURL en la nube
+  customSpecies?: SpeciesCatalogEntry[];
 }
 
 /**
@@ -135,24 +142,157 @@ export async function clearLocalDeviceIndexedDb(): Promise<void> {
   });
 }
 
+function unwrapLegacyProxyUrl(url: string): string {
+  if (!url || !url.includes('/api/image-proxy?url=')) return url;
+  try {
+    const parsed = new URL(url, 'http://localhost');
+    const target = parsed.searchParams.get('url');
+    return target || url;
+  } catch {
+    return url;
+  }
+}
+
 export function loadLocalDeviceState(): AppPersistedState {
   try {
     const raw = localStorage.getItem(LOCAL_DEVICE_STATE_KEY);
     if (!raw) {
-      return { user: null, notebooks: [], sheets: [], sightings: [], illustrations: [] };
+      return {
+        user: null,
+        notebooks: [],
+        sheets: [],
+        sightings: [],
+        illustrations: [],
+        customSpecies: [],
+      };
     }
-    return JSON.parse(raw) as AppPersistedState;
+    const parsed = JSON.parse(raw) as AppPersistedState;
+    if (Array.isArray(parsed.illustrations)) {
+      parsed.illustrations = parsed.illustrations.map((ill) => ({
+        ...ill,
+        imageUrl: unwrapLegacyProxyUrl(ill.imageUrl),
+      }));
+    }
+    hydrateCustomSpecies(parsed.customSpecies);
+    return parsed;
   } catch {
-    return { user: null, notebooks: [], sheets: [], sightings: [], illustrations: [] };
+    return {
+      user: null,
+      notebooks: [],
+      sheets: [],
+      sightings: [],
+      illustrations: [],
+      customSpecies: [],
+    };
   }
 }
 
 export function saveLocalDeviceState(state: AppPersistedState): void {
+  const mergedCustom = Array.from(
+    new Map(
+      [...(state.customSpecies || []), ...getCustomSpeciesList()].map((sp) => [sp.taxonId, sp])
+    ).values()
+  );
+  const fullPayload = { ...state, customSpecies: mergedCustom };
+
   try {
-    localStorage.setItem(LOCAL_DEVICE_STATE_KEY, JSON.stringify(state));
+    localStorage.setItem(LOCAL_DEVICE_STATE_KEY, JSON.stringify(fullPayload));
   } catch {
-    // Manejo seguro si el almacenamiento local está lleno
+    // Si localStorage alcanza la cuota (~5 MB), guardar estado liviano confiando los binarios a IndexedDB
+    try {
+      const slimPayload: AppPersistedState = {
+        ...fullPayload,
+        sightings: fullPayload.sightings.map((s) =>
+          s.photoStorageKey && s.sanitizedPhotoDataUrl.startsWith('data:')
+            ? { ...s, sanitizedPhotoDataUrl: '' }
+            : s
+        ),
+      };
+      localStorage.setItem(LOCAL_DEVICE_STATE_KEY, JSON.stringify(slimPayload));
+    } catch {
+      // Último resguardo silencioso
+    }
   }
+}
+
+/**
+ * Rehidrata en memoria las fotografías binarias guardadas en IndexedDB cuando el estado
+ * liviano omitió DataURLs grandes en localStorage.
+ */
+export async function rehydrateSightingPhotosFromIndexedDb(
+  sightings: Sighting[]
+): Promise<Sighting[]> {
+  let changed = false;
+  const hydrated = await Promise.all(
+    sightings.map(async (s) => {
+      if (s.sanitizedPhotoDataUrl || !s.photoStorageKey) return s;
+      const fromIdb = await loadPhotoBinaryFromIndexedDb(s.photoStorageKey);
+      if (fromIdb) {
+        changed = true;
+        return { ...s, sanitizedPhotoDataUrl: fromIdb };
+      }
+      return s;
+    })
+  );
+  return changed ? hydrated : sightings;
+}
+
+/**
+ * Exporta una copia de seguridad portátil (.json) con todos los cuadernos, láminas, fotos y notas.
+ */
+export async function exportFullBackupJson(state: AppPersistedState): Promise<string> {
+  const hydratedSightings = await rehydrateSightingPhotosFromIndexedDb(state.sightings);
+  const payload = {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    app: 'Birdy — Cuaderno de Aves',
+    state: {
+      ...state,
+      sightings: hydratedSightings,
+      customSpecies: Array.from(
+        new Map(
+          [...(state.customSpecies || []), ...getCustomSpeciesList()].map((sp) => [sp.taxonId, sp])
+        ).values()
+      ),
+    },
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+/**
+ * Importa y valida una copia de seguridad (.json) restaurando también las fotos en IndexedDB.
+ */
+export async function importFullBackupJson(rawJson: string): Promise<AppPersistedState> {
+  const parsed = JSON.parse(rawJson) as { state?: AppPersistedState } | AppPersistedState;
+  const candidate = 'state' in parsed && parsed.state ? parsed.state : (parsed as AppPersistedState);
+
+  if (!candidate || !Array.isArray(candidate.notebooks) || !Array.isArray(candidate.sightings)) {
+    throw new Error('El archivo no tiene el formato de respaldo de Birdy.');
+  }
+
+  hydrateCustomSpecies(candidate.customSpecies);
+
+  for (const s of candidate.sightings) {
+    if (s.photoStorageKey && s.sanitizedPhotoDataUrl) {
+      await savePhotoBinaryToIndexedDb(s.photoStorageKey, s.sanitizedPhotoDataUrl, s.photoSha256);
+    }
+  }
+
+  const normalized: AppPersistedState = {
+    user: candidate.user || {
+      uid: 'google-valeria-ar-01',
+      displayName: 'Valeria',
+      email: 'valeria.jardinyviajes@gmail.com',
+    },
+    notebooks: candidate.notebooks,
+    sheets: Array.isArray(candidate.sheets) ? candidate.sheets : [],
+    sightings: candidate.sightings,
+    illustrations: Array.isArray(candidate.illustrations) ? candidate.illustrations : [],
+    customSpecies: candidate.customSpecies || [],
+  };
+
+  saveLocalDeviceState(normalized);
+  return normalized;
 }
 
 export function loadCloudBackupForUser(uid: string): CloudBackupPayload | null {
@@ -237,10 +377,15 @@ export async function syncSightingAndNotebookToCloud(params: {
     existingCloud.sightings.push(updatedSighting);
   }
 
-  // Sincronizar cuadernos, fichas e ilustraciones vinculadas
+  // Sincronizar cuadernos, fichas, ilustraciones y especies descubiertas vinculadas
   existingCloud.notebooks = state.notebooks.map((nb) => ({ ...nb, syncStatus: 'respaldado' as SyncStatus }));
   existingCloud.sheets = [...state.sheets];
   existingCloud.illustrations = [...state.illustrations];
+  existingCloud.customSpecies = Array.from(
+    new Map(
+      [...(state.customSpecies || []), ...getCustomSpeciesList()].map((sp) => [sp.taxonId, sp])
+    ).values()
+  );
   existingCloud.updatedAt = new Date().toISOString();
 
   saveCloudBackupForUser(existingCloud);
@@ -284,6 +429,8 @@ export async function restoreFromGoogleCloudOnNewDevice(uid: string): Promise<Ap
     }
   }
 
+  hydrateCustomSpecies(cloud.customSpecies);
+
   const restoredState: AppPersistedState = {
     user: {
       uid,
@@ -299,6 +446,7 @@ export async function restoreFromGoogleCloudOnNewDevice(uid: string): Promise<Ap
       sanitizedPhotoDataUrl: cloud.backedUpPhotos[s.photoStorageKey] || s.sanitizedPhotoDataUrl,
     })),
     illustrations: cloud.illustrations,
+    customSpecies: cloud.customSpecies || [],
   };
 
   saveLocalDeviceState(restoredState);
@@ -321,7 +469,7 @@ export function publishOrUpdateSanitizedNotebookProjection(
   const notebookSheets = allSheets.filter((sh) => sh.notebookId === notebook.id);
 
   const sanitizedSheets: PublicSanitizedSheet[] = notebookSheets
-    .map((sh) => {
+    .map((sh): PublicSanitizedSheet | null => {
       const species = findSpeciesByTaxonId(sh.taxonId);
       if (!species) return null;
 
@@ -330,7 +478,9 @@ export function publishOrUpdateSanitizedNotebookProjection(
         ill?.imageUrl ||
         (notebook.style === 'acuarela_naturalista'
           ? species.defaultWatercolorPlate
-          : species.defaultGraphitePlate);
+          : species.defaultGraphitePlate) ||
+        species.referencePhotos?.[0]?.url ||
+        '/plates/acuarela_hornero.jpg';
 
       const speciesSightings = allSightings.filter(
         (s) =>
@@ -360,6 +510,10 @@ export function publishOrUpdateSanitizedNotebookProjection(
         commonNameAr: species.commonNameAr,
         scientificName: species.scientificName,
         family: species.family,
+        quickSummary: species.quickSummary,
+        sizeLabel: species.sizeLabel,
+        habitatTag: species.habitatTag,
+        dietTag: species.dietTag,
         identificationTraits: species.identificationTraits,
         typicalBehavior: species.typicalBehavior,
         dietAndHabitat: species.dietAndHabitat,

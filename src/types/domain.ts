@@ -46,19 +46,33 @@ export interface Notebook {
   syncStatus: SyncStatus;
 }
 
+export interface SpeciesReferencePhoto {
+  url: string;
+  thumbUrl: string;
+  attribution?: string;
+  source?: string;
+}
+
 export interface SpeciesCatalogEntry {
   taxonId: string;
   scientificName: string;
   commonNameAr: string;
   alternativeNames: string[];
   family: string;
+  quickSummary?: string;
+  sizeLabel?: string;
+  habitatTag?: string;
+  dietTag?: string;
   identificationTraits: string;
   typicalBehavior: string;
   dietAndHabitat: string;
   generalDistribution: string;
   typicalRegionsAr: string[];
-  defaultWatercolorPlate: string;
-  defaultGraphitePlate: string;
+  defaultWatercolorPlate?: string;
+  defaultGraphitePlate?: string;
+  referencePhotos?: SpeciesReferencePhoto[];
+  wikipediaUrl?: string;
+  inaturalistTaxonId?: number;
 }
 
 export interface Illustration {
@@ -77,9 +91,21 @@ export interface AICandidate {
   taxonId: string;
   commonNameAr: string;
   scientificName: string;
+  alternativeNames?: string[];
+  family?: string;
   confidenceBand: 'Muy probable' | 'Posible candidata' | 'Baja certeza';
   reasoning: string;
   keyVisibleTraits: string[];
+  quickSummary?: string;
+  sizeLabel?: string;
+  habitatTag?: string;
+  dietTag?: string;
+  identificationTraits?: string;
+  typicalBehavior?: string;
+  dietAndHabitat?: string;
+  generalDistribution?: string;
+  referencePhotos?: SpeciesReferencePhoto[];
+  wikipediaUrl?: string;
 }
 
 export interface ExifSuggestions {
@@ -142,6 +168,10 @@ export interface PublicSanitizedSheet {
   commonNameAr: string;
   scientificName: string;
   family: string;
+  quickSummary?: string;
+  sizeLabel?: string;
+  habitatTag?: string;
+  dietTag?: string;
   identificationTraits: string;
   typicalBehavior: string;
   dietAndHabitat: string;

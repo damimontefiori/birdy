@@ -1,5 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, Download, Image as ImageIcon, Share2, ShieldCheck, Sparkles, X } from 'lucide-react';
+import {
+  CheckCircle2,
+  Download,
+  Image as ImageIcon,
+  Share2,
+  ShieldCheck,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import {
   composeSocialShareCard,
   RenderedSocialCard,
@@ -26,9 +34,10 @@ export const ShareSightingModal: React.FC<ShareSightingModalProps> = ({
   style,
   onClose,
 }) => {
-  const [variant, setVariant] = useState<SocialShareVariant>('solo_ilustracion');
+  const [variant, setVariant] = useState<SocialShareVariant>('ilustracion_y_foto');
   const [format, setFormat] = useState<SocialShareFormat>('historia_9_16');
   const [includeDate, setIncludeDate] = useState<boolean>(true);
+  const [includeSpeciesInfo, setIncludeSpeciesInfo] = useState<boolean>(true);
   const [includePersonalNote, setIncludePersonalNote] = useState<boolean>(false);
   const [rendered, setRendered] = useState<RenderedSocialCard | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -42,6 +51,11 @@ export const ShareSightingModal: React.FC<ShareSightingModalProps> = ({
       commonNameAr: species.commonNameAr,
       scientificName: species.scientificName,
       family: species.family,
+      quickSummary: species.quickSummary || species.identificationTraits,
+      sizeLabel: species.sizeLabel,
+      habitatTag: species.habitatTag,
+      dietTag: species.dietTag,
+      includeSpeciesInfo,
       illustrationUrl,
       originalPhotoSanitizedUrl: sighting.sanitizedPhotoDataUrl,
       includeDate,
@@ -64,6 +78,7 @@ export const ShareSightingModal: React.FC<ShareSightingModalProps> = ({
     illustrationUrl,
     sighting,
     includeDate,
+    includeSpeciesInfo,
     includePersonalNote,
     notebook,
   ]);
@@ -76,150 +91,135 @@ export const ShareSightingModal: React.FC<ShareSightingModalProps> = ({
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(30, 25, 20, 0.62)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 16,
-        zIndex: 1000,
-        overflowY: 'auto',
-      }}
+      className="modal-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Compartir avistamiento en redes"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
-      <div
-        className="notebook-page"
-        style={{
-          maxWidth: 780,
-          width: '100%',
-          maxHeight: '92vh',
-          overflowY: 'auto',
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+      <div className="modal-sheet share-modal-sheet">
+        <div className="modal-sheet-handle" aria-hidden="true" />
+
+        <div className="modal-sheet-header">
           <div>
-            <h2 className="serif-heading" style={{ fontSize: '1.75rem', margin: 0 }}>
-              Compartir lámina de {species.commonNameAr}
+            <h2 className="serif-heading" style={{ fontSize: '1.65rem', margin: 0 }}>
+              Compartir {species.commonNameAr}
             </h2>
-            <span style={{ fontSize: '0.88rem', color: 'var(--ink-secondary)' }}>
-              Lista para enviar por WhatsApp o publicar en Instagram (sin volver a llamar a la IA)
+            <span style={{ fontSize: '0.84rem', color: 'var(--ink-secondary)' }}>
+              Lista para WhatsApp o Instagram · sin datos privados ni EXIF
             </span>
           </div>
-          <button className="btn btn-secondary" onClick={onClose} aria-label="Cerrar">
-            <X size={18} /> Cerrar
+          <button
+            type="button"
+            className="icon-circle-btn"
+            onClick={onClose}
+            aria-label="Cerrar"
+          >
+            <X size={20} />
           </button>
         </div>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: 20,
-            alignItems: 'start',
-          }}
-        >
-          {/* Controles de composición */}
+        <div className="share-modal-grid">
+          {/* Vista previa arriba en celular */}
+          <div className="share-preview-pane">
+            {rendered && (
+              <div className="share-preview-frame">
+                <img
+                  src={rendered.dataUrl}
+                  alt="Previsualización de lámina para compartir"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Controles compactos */}
           <div>
             <div className="field-group">
-              <label>1. Elegí el diseño de la pieza (CA12)</label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <label>Diseño de la postal</label>
+              <div className="segmented-control">
                 <button
                   type="button"
-                  className={`style-option-card ${variant === 'solo_ilustracion' ? 'selected' : ''}`}
-                  onClick={() => setVariant('solo_ilustracion')}
-                >
-                  <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Sparkles size={16} color="#38573E" /> Solo ilustración artística + datos básicos
-                  </div>
-                  <div className="field-hint">
-                    Presenta la lámina naturalista limpia con su nombre y firma del cuaderno.
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  className={`style-option-card ${variant === 'ilustracion_y_foto' ? 'selected' : ''}`}
+                  className={`segmented-btn ${variant === 'ilustracion_y_foto' ? 'active' : ''}`}
                   onClick={() => setVariant('ilustracion_y_foto')}
                 >
-                  <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <ImageIcon size={16} color="#38573E" /> Ilustración artística + fotografía real
-                  </div>
-                  <div className="field-hint">
-                    Combina la lámina con tu foto original en un recuadro estilo estampa de campo.
-                  </div>
+                  <ImageIcon size={15} /> Lámina + Foto
+                </button>
+                <button
+                  type="button"
+                  className={`segmented-btn ${variant === 'solo_ilustracion' ? 'active' : ''}`}
+                  onClick={() => setVariant('solo_ilustracion')}
+                >
+                  <Sparkles size={15} /> Solo lámina
                 </button>
               </div>
             </div>
 
             <div className="field-group">
-              <label>2. Formato para redes</label>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <label>Formato</label>
+              <div className="segmented-control">
                 <button
                   type="button"
-                  className={`btn ${format === 'historia_9_16' ? 'btn-primary' : 'btn-secondary'}`}
+                  className={`segmented-btn ${format === 'historia_9_16' ? 'active' : ''}`}
                   onClick={() => setFormat('historia_9_16')}
                 >
-                  Historia / Estado (9:16)
+                  Historia (9:16)
                 </button>
                 <button
                   type="button"
-                  className={`btn ${format === 'publicacion_4_5' ? 'btn-primary' : 'btn-secondary'}`}
+                  className={`segmented-btn ${format === 'publicacion_4_5' ? 'active' : ''}`}
                   onClick={() => setFormat('publicacion_4_5')}
                 >
-                  Publicación / Feed (4:5)
+                  Feed (4:5)
                 </button>
               </div>
             </div>
 
             <div className="field-group">
-              <label>3. Detalles opcionales</label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 500, cursor: 'pointer' }}>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={includeSpeciesInfo}
+                  onChange={(e) => setIncludeSpeciesInfo(e.target.checked)}
+                />
+                <span>Incluir ficha breve y datos del ave</span>
+              </label>
+
+              <label className="check-row">
                 <input
                   type="checkbox"
                   checked={includeDate}
                   onChange={(e) => setIncludeDate(e.target.checked)}
                 />
-                Incluir fecha del avistamiento
+                <span>Incluir fecha del avistamiento</span>
               </label>
 
               {sighting.personalNote?.trim() && (
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    fontWeight: 500,
-                    marginTop: 6,
-                    cursor: 'pointer',
-                  }}
-                >
+                <label className="check-row">
                   <input
                     type="checkbox"
                     checked={includePersonalNote}
                     onChange={(e) => setIncludePersonalNote(e.target.checked)}
                   />
-                  Incluir mi nota personal («{sighting.personalNote.slice(0, 38)}…»)
+                  <span>Incluir mi nota («{sighting.personalNote.slice(0, 36)}…»)</span>
                 </label>
               )}
             </div>
 
-            <div className="callout-box" style={{ marginBottom: 14 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: '#28402C' }}>
-                <ShieldCheck size={16} /> Privacidad garantizada (CA14)
-              </div>
-              <div style={{ fontSize: '0.84rem', marginTop: 4 }}>
-                Firma incluida: <strong>«{notebook.title} — {notebook.ownerDisplayName || 'Valeria'}»</strong>.
-                La imagen exportada nunca incluye coordenadas GPS, dirección postal ni metadatos EXIF.
-              </div>
+            <div className="callout-box" style={{ marginBottom: 14, fontSize: '0.82rem' }}>
+              <ShieldCheck size={14} style={{ verticalAlign: 'middle', marginRight: 5 }} />
+              Firma: <strong>{notebook.title} — {notebook.ownerDisplayName || 'Valeria'}</strong> · Sin GPS ni EXIF.
             </div>
 
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <button type="button" className="btn btn-primary" onClick={handleShare}>
-                <Share2 size={17} /> Compartir en Instagram / WhatsApp
+            <div className="modal-sheet-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ flex: 1 }}
+                onClick={handleShare}
+              >
+                <Share2 size={17} /> Compartir
               </button>
               {rendered && (
                 <a
@@ -227,44 +227,15 @@ export const ShareSightingModal: React.FC<ShareSightingModalProps> = ({
                   download={`lamina-${species.taxonId}-${variant}.png`}
                   className="btn btn-secondary"
                 >
-                  <Download size={17} /> Guardar imagen
+                  <Download size={17} /> Guardar
                 </a>
               )}
             </div>
 
             {statusMessage && (
-              <div className="callout-box" style={{ marginTop: 12 }}>
+              <div className="callout-box" style={{ marginTop: 10, fontSize: '0.84rem' }}>
                 <CheckCircle2 size={15} style={{ verticalAlign: 'middle', marginRight: 6 }} />
                 {statusMessage}
-              </div>
-            )}
-          </div>
-
-          {/* Previsualización exacta de lo que se compartirá */}
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 8, color: 'var(--ink-secondary)' }}>
-              Vista previa exacta ({variant === 'solo_ilustracion' ? 'Solo ilustración' : 'Ilustración + foto real'})
-            </div>
-            {rendered && (
-              <div
-                style={{
-                  background: 'var(--paper-inset)',
-                  padding: 12,
-                  borderRadius: 12,
-                  border: '1px solid var(--paper-edge)',
-                  display: 'inline-block',
-                }}
-              >
-                <img
-                  src={rendered.dataUrl}
-                  alt="Previsualización de lámina para compartir"
-                  style={{
-                    maxWidth: '100%',
-                    maxHeight: 420,
-                    borderRadius: 8,
-                    boxShadow: '0 4px 14px rgba(0,0,0,0.12)',
-                  }}
-                />
               </div>
             )}
           </div>

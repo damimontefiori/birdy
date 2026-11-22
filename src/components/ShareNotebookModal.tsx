@@ -79,117 +79,107 @@ export const ShareNotebookModal: React.FC<ShareNotebookModalProps> = ({
       setLastRevokedToken(tokenBeingRevoked);
     }
     setRevokedNotice(
-      'El enlace fue revocado de inmediato. Cualquier persona que intente abrir la dirección anterior verá que el acceso fue desactivado.'
+      'El enlace fue revocado de inmediato. Cualquier persona que abra la dirección anterior ya no podrá acceder.'
     );
   };
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(30, 25, 20, 0.62)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 16,
-        zIndex: 1000,
-      }}
+      className="modal-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Compartir cuaderno completo"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
-      <div className="notebook-page" style={{ maxWidth: 640, width: '100%' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <div className="modal-sheet">
+        <div className="modal-sheet-handle" aria-hidden="true" />
+
+        <div className="modal-sheet-header">
           <div>
-            <h2 className="serif-heading" style={{ fontSize: '1.75rem', margin: 0 }}>
-              Compartir cuaderno «{notebook.title}»
+            <h2 className="serif-heading" style={{ fontSize: '1.65rem', margin: 0 }}>
+              Compartir «{notebook.title}»
             </h2>
-            <span style={{ fontSize: '0.88rem', color: 'var(--ink-secondary)' }}>
-              Enlace web de solo lectura para familiares y amigos (sin instalar la app ni registrarse)
+            <span style={{ fontSize: '0.85rem', color: 'var(--ink-secondary)' }}>
+              Enlace de solo lectura para familia y amigos, sin registro ni instalación.
             </span>
           </div>
-          <button className="btn btn-secondary" onClick={onClose}>
-            <X size={18} /> Cerrar
+          <button
+            type="button"
+            className="icon-circle-btn"
+            onClick={onClose}
+            aria-label="Cerrar"
+          >
+            <X size={20} />
           </button>
         </div>
 
-        <div className="callout-box" style={{ marginBottom: 16 }}>
+        <div className="callout-box" style={{ marginBottom: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: '#28402C' }}>
-            <ShieldCheck size={17} /> Qué ven tus invitados vs. tu registro privado (CA14)
+            <ShieldCheck size={16} /> Privacidad protegida
           </div>
-          <ul style={{ margin: '6px 0 0', paddingLeft: 20, fontSize: '0.88rem' }}>
-            <li>
-              <strong>Visible por defecto:</strong> Portada del cuaderno, láminas ilustradas ({notebook.style === 'acuarela_naturalista' ? 'Acuarela' : 'Lápiz grafito'}), nombres de las aves y datos educativos.
-            </li>
-            <li>
-              <strong>Siempre privado (nunca se publica):</strong> Ubicación exacta, coordenadas GPS, metadatos EXIF de tus fotos, avistamientos en borrador y tu correo de Google.
-            </li>
-          </ul>
+          <p style={{ margin: '5px 0 0', fontSize: '0.85rem', color: 'var(--ink-secondary)' }}>
+            Por defecto solo se muestran las láminas ilustradas y datos básicos. Nunca se publican
+            coordenadas GPS, direcciones, metadatos EXIF ni tu correo.
+          </p>
         </div>
 
         <div className="field-group">
-          <label>Opciones de privacidad para este cuaderno (consentimiento explícito)</label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 500, cursor: 'pointer' }}>
+          <label>Qué querés incluir en el enlace</label>
+          <label className="check-row">
             <input
               type="checkbox"
               checked={includePhotos}
               onChange={(e) => handleToggleOption(e.target.checked, includeNotes)}
             />
-            Incluir mis fotografías originales sanitizadas (sin EXIF ni GPS)
+            <span>Incluir mis fotografías reales (sin EXIF ni GPS)</span>
           </label>
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              fontWeight: 500,
-              marginTop: 6,
-              cursor: 'pointer',
-            }}
-          >
+          <label className="check-row">
             <input
               type="checkbox"
               checked={includeNotes}
               onChange={(e) => handleToggleOption(includePhotos, e.target.checked)}
             />
-            Incluir mis notas personales de avistamiento
+            <span>Incluir mis notas personales</span>
           </label>
         </div>
 
         {isEnabled && notebook.shareConfig.shareToken ? (
           <div style={{ marginTop: 14 }}>
-            <label style={{ fontWeight: 600, fontSize: '0.9rem', display: 'block', marginBottom: 6 }}>
-              Enlace HTTPS público activo:
+            <label style={{ fontWeight: 600, fontSize: '0.88rem', display: 'block', marginBottom: 6 }}>
+              Enlace público activo:
             </label>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <input
                 type="text"
                 readOnly
                 className="input-text"
-                style={{ flex: 1, minWidth: 220 }}
+                style={{ flex: 1, minWidth: 0 }}
                 value={shareUrl}
                 aria-label="URL pública del cuaderno"
               />
-              <button type="button" className="btn btn-secondary" onClick={handleCopy}>
+              <button type="button" className="btn btn-secondary btn-compact" onClick={handleCopy}>
                 {copied ? <Check size={16} /> : <Copy size={16} />}
-                {copied ? 'Copiado' : 'Copiar enlace'}
+                {copied ? 'Copiado' : 'Copiar'}
               </button>
             </div>
 
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'space-between' }}>
+            <div className="modal-sheet-actions" style={{ flexDirection: 'column', gap: 8 }}>
               <button
                 type="button"
                 className="btn btn-primary"
+                style={{ width: '100%' }}
                 onClick={() => onOpenGuestPreview(notebook.shareConfig.shareToken!)}
               >
-                <ExternalLink size={16} /> Abrir vista web pública (como invitado)
+                <ExternalLink size={16} /> Ver como invitado
               </button>
 
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, width: '100%' }}>
                 <button
                   type="button"
                   className="btn btn-secondary"
+                  style={{ flex: 1 }}
                   onClick={() =>
                     onActivateOrUpdateShare({
                       includeOriginalPhotos: includePhotos,
@@ -197,19 +187,28 @@ export const ShareNotebookModal: React.FC<ShareNotebookModalProps> = ({
                       regenerateToken: true,
                     })
                   }
-                  title="Invalida el enlace anterior y crea uno nuevo"
                 >
-                  <RefreshCw size={15} /> Crear nuevo enlace
+                  <RefreshCw size={15} /> Nuevo enlace
                 </button>
-                <button type="button" className="btn btn-terracotta" onClick={handleRevoke}>
-                  <Lock size={16} /> Revocar enlace
+                <button
+                  type="button"
+                  className="btn btn-terracotta"
+                  style={{ flex: 1 }}
+                  onClick={handleRevoke}
+                >
+                  <Lock size={15} /> Revocar
                 </button>
               </div>
             </div>
           </div>
         ) : (
           <div style={{ marginTop: 14 }}>
-            <button type="button" className="btn btn-primary" onClick={handleEnable}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ width: '100%' }}
+              onClick={handleEnable}
+            >
               <Globe size={17} /> Activar enlace público de lectura
             </button>
           </div>
@@ -218,17 +217,17 @@ export const ShareNotebookModal: React.FC<ShareNotebookModalProps> = ({
         {revokedNotice && (
           <div className="callout-box terracotta" style={{ marginTop: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700 }}>
-              <ShieldAlert size={16} /> Enlace revocado (CA15)
+              <ShieldAlert size={16} /> Enlace revocado
             </div>
-            <div style={{ fontSize: '0.88rem', marginTop: 4 }}>{revokedNotice}</div>
+            <div style={{ fontSize: '0.85rem', marginTop: 4 }}>{revokedNotice}</div>
             {lastRevokedToken && (
               <button
                 type="button"
-                className="btn btn-secondary"
-                style={{ marginTop: 8, padding: '6px 12px', fontSize: '0.82rem' }}
+                className="btn btn-secondary btn-compact"
+                style={{ marginTop: 8 }}
                 onClick={() => onOpenGuestPreview(lastRevokedToken)}
               >
-                Comprobar que el enlace revocado ya no permite acceso
+                Comprobar enlace revocado
               </button>
             )}
           </div>

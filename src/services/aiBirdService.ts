@@ -1,11 +1,22 @@
-import { ARGENTINA_BIRDS_CATALOG, findSpeciesByTaxonId } from '../data/argentinaBirdsCatalog';
+import {
+  ARGENTINA_BIRDS_CATALOG,
+  buildStableTaxonIdFromScientificName,
+  findSpeciesByScientificName,
+  findSpeciesByTaxonId,
+  registerCustomSpecies,
+} from '../data/argentinaBirdsCatalog';
 import {
   AICandidate,
   ConfidenceLevel,
   IdentificationStatus,
   Illustration,
   IllustrationStyle,
+  SpeciesCatalogEntry,
 } from '../types/domain';
+import {
+  fetchReferencePhotosForSpecies,
+  getProxiedImageUrl,
+} from './speciesReferenceService';
 
 export interface IdentificationRequest {
   photoSha256: string;
@@ -19,6 +30,7 @@ export interface IdentificationRequest {
     | 'clara_chingolo'
     | 'clara_benteveo'
     | 'clara_zorzal'
+    | 'clara_ratona'
     | 'duda_semillita_o_chingolo'
     | 'borrosa_oculta'
     | 'sin_ave';
@@ -33,12 +45,23 @@ export interface IdentificationResponse {
   uncertaintyReason: string | null;
   fromCache: boolean;
   taxonomicSource: string;
+  aiMode: 'gemini' | 'demo_preset' | 'unconfigured' | 'error';
+  modelUsed?: string;
+  aiErrorMessage?: string;
 }
 
-// Caché idempotente por hash SHA-256 para evitar consumos duplicados por reintentos accidentales (CA16)
-const identificationCache = new Map<string, IdentificationResponse>();
+export interface BackendAiHealth {
+  ok: boolean;
+  aiConfigured: boolean;
+  provider: string;
+  visionModel?: string;
+  imageModel?: string;
+}
 
-// Métricas mínimas de control de consumo de IA (§7.4, CA16)
+// Caché idempotente por hash SHA-256 para evitar consumos duplicados por reintentos accidentales
+const identificationCache = new Map<string, IdentificationResponse>();
+let cachedAiConfigured: boolean | null = null;
+
 export interface AIConsumptionMetrics {
   identificationsExecuted: number;
   identificationsPreventedByCache: number;
@@ -57,82 +80,245 @@ export function getAIConsumptionMetrics(): AIConsumptionMetrics {
   return { ...consumptionMetrics };
 }
 
+function getApiBase(): string {
+  const custom = import.meta.env.VITE_BACKEND_API_URL;
+  return custom ? custom.replace(/\/$/, '') : '';
+}
+
+function isTestEnvironment(): boolean {
+  return typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent || '');
+}
+
+/**
+ * Consulta el estado del backend seguro de IA (Google Gemini) sin exponer claves.
+ */
+export async function checkBackendAiHealth(): Promise<BackendAiHealth> {
+  if (isTestEnvironment()) {
+    return { ok: false, aiConfigured: false, provider: 'gemini' };
+  }
+  try {
+    const res = await fetch(`${getApiBase()}/api/health`);
+    if (res.ok) {
+      const data = (await res.json()) as BackendAiHealth;
+      cachedAiConfigured = Boolean(data.aiConfigured);
+      return data;
+    }
+  } catch {
+    // Servidor no disponible
+  }
+  cachedAiConfigured = false;
+  return { ok: false, aiConfigured: false, provider: 'gemini' };
+}
+
+/**
+ * Convierte una candidata devuelta por Gemini en entrada persistible del catálogo
+ * (enlazándola al catálogo local si coincide el nombre científico o registrándola dinámicamente).
+ */
+function normalizeAndRegisterCandidate(raw: AICandidate): AICandidate {
+  const existing =
+    findSpeciesByScientificName(raw.scientificName) || findSpeciesByTaxonId(raw.taxonId);
+
+  if (existing) {
+    const updated = registerCustomSpecies({
+      ...existing,
+      referencePhotos: raw.referencePhotos?.length
+        ? raw.referencePhotos
+        : existing.referencePhotos,
+      wikipediaUrl: raw.wikipediaUrl || existing.wikipediaUrl,
+    });
+    return {
+      ...raw,
+      taxonId: updated.taxonId,
+      commonNameAr: existing.commonNameAr || raw.commonNameAr,
+      scientificName: updated.scientificName,
+      alternativeNames: existing.alternativeNames.length
+        ? existing.alternativeNames
+        : raw.alternativeNames,
+      family: existing.family || raw.family,
+      quickSummary: existing.quickSummary || raw.quickSummary,
+      sizeLabel: existing.sizeLabel || raw.sizeLabel,
+      habitatTag: existing.habitatTag || raw.habitatTag,
+      dietTag: existing.dietTag || raw.dietTag,
+      referencePhotos: updated.referencePhotos || raw.referencePhotos,
+      wikipediaUrl: updated.wikipediaUrl || raw.wikipediaUrl,
+    };
+  }
+
+  const stableId = buildStableTaxonIdFromScientificName(raw.scientificName);
+  const newEntry: SpeciesCatalogEntry = {
+    taxonId: stableId,
+    scientificName: raw.scientificName,
+    commonNameAr: raw.commonNameAr,
+    alternativeNames: raw.alternativeNames || [],
+    family: raw.family || 'Aves',
+    quickSummary: raw.quickSummary || raw.reasoning,
+    sizeLabel: raw.sizeLabel,
+    habitatTag: raw.habitatTag,
+    dietTag: raw.dietTag,
+    identificationTraits: raw.identificationTraits || raw.quickSummary || raw.reasoning,
+    typicalBehavior: raw.typicalBehavior || 'Observación registrada mediante identificación asistida por IA.',
+    dietAndHabitat: raw.dietAndHabitat || raw.habitatTag || 'Información disponible según región.',
+    generalDistribution: raw.generalDistribution || 'Avifauna registrada en Argentina.',
+    typicalRegionsAr: [],
+    referencePhotos: raw.referencePhotos || [],
+    wikipediaUrl: raw.wikipediaUrl,
+  };
+  registerCustomSpecies(newEntry);
+
+  return {
+    ...raw,
+    taxonId: stableId,
+  };
+}
+
 /**
  * Servicio de identificación de aves asistida por IA.
- * - Nunca expone claves de API en el cliente (CA16).
- * - Si existe VITE_BACKEND_API_URL configurado, delega al endpoint seguro del servidor (Google Gemini + eBird).
- * - Incluye evaluación calibrada de incertidumbre (Alta, Con duda / Especies semejantes, Evidencia insuficiente / Sin ave).
+ * - Nunca expone claves de API en el cliente.
+ * - Para fotos reales (`presetScenario === 'auto'` o indefinido), llama al backend seguro `/api/identify-bird`
+ *   con Google Gemini Vision + referencias reales de iNaturalist.
+ * - NUNCA inventa ni adjudica «Hornero común» por defecto si no hay IA configurada.
  */
 export async function identifyBirdFromPhoto(
   req: IdentificationRequest,
   forceRefresh = false
 ): Promise<IdentificationResponse> {
-  const cacheKey = `${req.photoSha256}_${req.presetScenario || 'auto'}`;
+  const scenarioKey = req.presetScenario || 'auto';
+  const cacheKey = `${req.photoSha256}_${scenarioKey}`;
+
   if (!forceRefresh && identificationCache.has(cacheKey)) {
     consumptionMetrics.identificationsPreventedByCache += 1;
     const cached = identificationCache.get(cacheKey)!;
     return { ...cached, fromCache: true };
   }
 
-  const backendUrl = import.meta.env.VITE_BACKEND_API_URL;
-  if (backendUrl) {
+  // 1. Escenarios explícitos de demostración / pruebas automatizadas
+  if (req.presetScenario && req.presetScenario !== 'auto') {
+    await new Promise((r) => setTimeout(r, isTestEnvironment() ? 20 : 350));
+    consumptionMetrics.identificationsExecuted += 1;
+    const demoResponse = buildCalibratedDemoResponse(req.presetScenario, req.generalLocationHint);
+    // Enriquecer fotos de referencia reales en segundo plano para el comparador visual
+    if (!isTestEnvironment() && demoResponse.candidates.length > 0) {
+      await Promise.all(
+        demoResponse.candidates.map(async (c) => {
+          const photos = await fetchReferencePhotosForSpecies(c.scientificName);
+          if (photos.length > 0) {
+            c.referencePhotos = photos;
+          }
+        })
+      );
+    }
+    identificationCache.set(cacheKey, demoResponse);
+    return demoResponse;
+  }
+
+  // 2. Identificación real mediante backend seguro (/api/identify-bird -> Google Gemini Vision)
+  if (!isTestEnvironment()) {
     try {
-      const res = await fetch(`${backendUrl.replace(/\/$/, '')}/api/identify-bird`, {
+      const res = await fetch(`${getApiBase()}/api/identify-bird`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(req),
+        body: JSON.stringify({
+          sanitizedPhotoDataUrl: req.sanitizedPhotoDataUrl,
+          generalLocationHint: req.generalLocationHint,
+          observedAtIso: req.observedAtIso,
+          fileName: req.fileName,
+          photoSha256: req.photoSha256,
+        }),
       });
+
       if (res.ok) {
-        const data = (await res.json()) as IdentificationResponse;
+        const raw = (await res.json()) as IdentificationResponse;
+        const normalizedCandidates = (raw.candidates || []).map(normalizeAndRegisterCandidate);
+        let proposedTaxonId = raw.proposedTaxonId;
+        if (proposedTaxonId && normalizedCandidates.length > 0) {
+          const matched =
+            normalizedCandidates.find((c) => c.taxonId === proposedTaxonId) ||
+            normalizedCandidates[0];
+          proposedTaxonId = matched?.taxonId || null;
+        }
+        const finalResponse: IdentificationResponse = {
+          ...raw,
+          proposedTaxonId: raw.confidenceLevel === 'insuficiente' ? null : proposedTaxonId,
+          candidates: normalizedCandidates,
+          fromCache: false,
+          aiMode: 'gemini',
+        };
         consumptionMetrics.identificationsExecuted += 1;
-        identificationCache.set(cacheKey, data);
-        return data;
+        identificationCache.set(cacheKey, finalResponse);
+        return finalResponse;
       }
+
+      const errPayload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+        detail?: string;
+      };
+
+      if (res.status === 503 || errPayload.error === 'GEMINI_API_KEY_MISSING') {
+        return {
+          status: 'pendiente_identificacion',
+          confidenceLevel: 'insuficiente',
+          proposedTaxonId: null,
+          candidates: [],
+          explanation:
+            'El reconocimiento automático de fotografías con Google Gemini aún no está activado en el servidor.',
+          uncertaintyReason:
+            'Para identificar cualquier ave real automáticamente (como una ratona común, zorzal o picaflor), agregá tu GEMINI_API_KEY en el archivo .env del proyecto. Mientras tanto, no adivinamos ninguna especie: podés buscarla abajo con fotos reales de referencia o dejarla en Pendientes.',
+          fromCache: false,
+          taxonomicSource: 'Motor de IA pendiente de configuración (GEMINI_API_KEY)',
+          aiMode: 'unconfigured',
+        };
+      }
+
+      return {
+        status: 'error_procesamiento',
+        confidenceLevel: 'insuficiente',
+        proposedTaxonId: null,
+        candidates: [],
+        explanation:
+          errPayload.message ||
+          'No pudimos completar el análisis de tu fotografía con Google Gemini en este momento.',
+        uncertaintyReason:
+          'Podés reintentar el análisis, elegir la especie manualmente comparando con fotos de referencia, o guardarla como «Pendiente de identificar».',
+        fromCache: false,
+        taxonomicSource: 'Google Gemini (reintento disponible)',
+        aiMode: 'error',
+        aiErrorMessage: errPayload.detail || errPayload.message,
+      };
     } catch {
-      // Continuar con el motor taxonómico local si el servidor no está disponible
+      return {
+        status: 'error_procesamiento',
+        confidenceLevel: 'insuficiente',
+        proposedTaxonId: null,
+        candidates: [],
+        explanation: 'No se pudo conectar con el servidor de identificación en este momento.',
+        uncertaintyReason:
+          'Verificá tu conexión o elegí la especie manualmente con la guía visual de fotos reales.',
+        fromCache: false,
+        taxonomicSource: 'Sin conexión con el servicio de IA',
+        aiMode: 'error',
+      };
     }
   }
 
-  // Pequeña pausa naturalista para dar feedback claro del análisis visual y contraste con catálogo eBird
-  await new Promise((r) => setTimeout(r, 420));
-  consumptionMetrics.identificationsExecuted += 1;
-
-  const scenario = resolveScenarioFromRequest(req);
-  const response = buildCalibratedResponse(scenario, req.generalLocationHint);
-  identificationCache.set(cacheKey, response);
-  return response;
+  // Fallback seguro en entornos de test sin preset explícito: nunca adjudica Hornero al azar
+  return {
+    status: 'pendiente_identificacion',
+    confidenceLevel: 'insuficiente',
+    proposedTaxonId: null,
+    candidates: [],
+    explanation:
+      'Sin motor de visión configurado para analizar esta fotografía automáticamente.',
+    uncertaintyReason:
+      'Configurá GEMINI_API_KEY en el servidor o elegí la especie manualmente desde el catálogo.',
+    fromCache: false,
+    taxonomicSource: 'Catálogo Ornitológico Argentina (eBird es_AR)',
+    aiMode: 'unconfigured',
+  };
 }
 
-function resolveScenarioFromRequest(
-  req: IdentificationRequest
-): NonNullable<IdentificationRequest['presetScenario']> {
-  if (req.presetScenario && req.presetScenario !== 'auto') {
-    return req.presetScenario;
-  }
-  const lower = (req.fileName || '').toLowerCase();
-  if (lower.includes('sin_ave') || lower.includes('paisaje') || lower.includes('maceta') || lower.includes('flor')) {
-    return 'sin_ave';
-  }
-  if (lower.includes('borrosa') || lower.includes('oculta') || lower.includes('lejos') || lower.includes('blur')) {
-    return 'borrosa_oculta';
-  }
-  if (lower.includes('duda') || lower.includes('similar') || lower.includes('contraluz')) {
-    return 'duda_semillita_o_chingolo';
-  }
-  if (lower.includes('chingolo') || lower.includes('sparrow')) {
-    return 'clara_chingolo';
-  }
-  if (lower.includes('benteveo') || lower.includes('kiskadee') || lower.includes('bichofeo')) {
-    return 'clara_benteveo';
-  }
-  if (lower.includes('zorzal') || lower.includes('thrush')) {
-    return 'clara_zorzal';
-  }
-  return 'clara_hornero';
-}
-
-function buildCalibratedResponse(
-  scenario: NonNullable<IdentificationRequest['presetScenario']>,
+function buildCalibratedDemoResponse(
+  scenario: Exclude<NonNullable<IdentificationRequest['presetScenario']>, 'auto'>,
   locationHint?: string
 ): IdentificationResponse {
   const regionNote = locationHint
@@ -152,6 +338,7 @@ function buildCalibratedResponse(
           'No se detectan siluetas, plumaje ni rasgos anatómicos de un ave. Podés guardar la foto como «Pendiente de identificar» o probar con una toma más cercana.',
         fromCache: false,
         taxonomicSource: 'Validación visual previa al catálogo eBird Argentina (es_AR)',
+        aiMode: 'demo_preset',
       };
 
     case 'borrosa_oculta':
@@ -165,7 +352,8 @@ function buildCalibratedResponse(
             commonNameAr: 'Zorzal colorado',
             scientificName: 'Turdus rufiventris',
             confidenceBand: 'Baja certeza',
-            reasoning: 'El tamaño mediano y el tono terroso del vientre se asemejan, pero la cabeza y el pico están ocultos.',
+            reasoning:
+              'El tamaño mediano y el tono terroso del vientre se asemejan, pero la cabeza y el pico están ocultos.',
             keyVisibleTraits: ['Silueta mediana entre ramas', 'Tono pardo cálido difuso'],
           },
           {
@@ -180,9 +368,10 @@ function buildCalibratedResponse(
         explanation:
           'Se distingue un ave entre el follaje, pero el desenfoque o las ramas ocultan el pico y el patrón de la cabeza.',
         uncertaintyReason:
-          'La evidencia visual no alcanza para adjudicar una especie con responsabilidad. Te sugerimos guardarla como «Pendiente de identificar» hasta comparar con otra foto o elegir manualmente si vos la reconociste en el momento.',
+          'La evidencia visual no alcanza para adjudicar una especie con responsabilidad. Te sugerimos guardarla como «Pendiente de identificar» o comparar con las fotos de referencia.',
         fromCache: false,
         taxonomicSource: 'Catálogo Ornitológico eBird Argentina (es_AR)',
+        aiMode: 'demo_preset',
       };
 
     case 'duda_semillita_o_chingolo':
@@ -201,29 +390,62 @@ function buildCalibratedResponse(
             keyVisibleTraits: ['Semicopete erizado', 'Collar nucal canela', 'Pico cónico corto'],
           },
           {
+            taxonId: 'houwre',
+            commonNameAr: 'Ratona común',
+            scientificName: 'Troglodytes aedon',
+            alternativeNames: ['Ratucha', 'Tacuarita'],
+            confidenceBand: 'Posible candidata',
+            reasoning:
+              'Si el ave era muy pequeña, de pico fino y sin collar rojizo, el tono pardo suave podría corresponder a una ratona común.',
+            keyVisibleTraits: ['Tamaño muy pequeño', 'Pico fino recto', 'Barrado fino en alas/cola'],
+          },
+          {
             taxonId: 'patmock1',
             commonNameAr: 'Calandria mora',
             scientificName: 'Mimus patagonicus',
-            confidenceBand: 'Posible candidata',
-            reasoning:
-              'El plumaje gris pardusco y la ceja clara podrían corresponder a una calandria si el ave tenía cola larga y porte más estilizado.',
-            keyVisibleTraits: ['Dorso gris pardusco', 'Ceja clara visible'],
-          },
-          {
-            taxonId: 'saytan1',
-            commonNameAr: 'Celestino común',
-            scientificName: 'Thraupis sayaca',
             confidenceBand: 'Baja certeza',
             reasoning:
-              'En sombra intensa su plumaje gris azulado puede parecer pardo grisáceo; verificalo si estaba en un árbol frutal.',
-            keyVisibleTraits: ['Silueta compacta en rama'],
+              'El plumaje gris pardusco y la ceja clara podrían corresponder a una calandria si tenía cola larga y porte más estilizado.',
+            keyVisibleTraits: ['Dorso gris pardusco', 'Ceja clara visible'],
           },
         ],
-        explanation: `Identificamos un ave paseriforme pequeña, pero hay dos especies nativas muy parecidas según el ángulo de la foto.${regionNote}`,
+        explanation: `Identificamos un ave pequeña, pero la luz a contraluz deja dos especies nativas muy parecidas.${regionNote}`,
         uncertaintyReason:
-          'La iluminación a contraluz dificulta ver con nitidez el largo de la cola y el collar rojizo del cuello. Revisá las candidatas y confirmá cuál viste.',
+          'La iluminación dificulta ver con nitidez el collar del cuello y el barrado de la cola. Compará tu foto con las fotos de referencia de cada candidata.',
         fromCache: false,
         taxonomicSource: 'Catálogo Ornitológico eBird Argentina (es_AR)',
+        aiMode: 'demo_preset',
+      };
+
+    case 'clara_ratona':
+      return {
+        status: 'identificado',
+        confidenceLevel: 'alta',
+        proposedTaxonId: 'houwre',
+        candidates: [
+          {
+            taxonId: 'houwre',
+            commonNameAr: 'Ratona común',
+            scientificName: 'Troglodytes aedon',
+            alternativeNames: ['Ratucha', 'Tacuarita'],
+            confidenceBand: 'Muy probable',
+            reasoning: `Ave muy pequeña de tono pardo ocráceo con fino barrado oscuro en alas y cola corta erguida, y pico delgado de insectívoro.${regionNote}`,
+            keyVisibleTraits: ['Tamaño diminuto (~11 cm)', 'Barrado fino en alas y cola', 'Pico fino y recto', 'Cola corta levantada'],
+          },
+          {
+            taxonId: 'rufhor2',
+            commonNameAr: 'Hornero común',
+            scientificName: 'Furnarius rufus',
+            confidenceBand: 'Baja certeza',
+            reasoning: 'A simple vista comparte tonos pardos, pero el hornero es mucho más grande, sin barrado en las alas y con patas largas.',
+            keyVisibleTraits: ['Plumaje rufo uniforme sin barras', 'Cuerpo casi el doble de grande'],
+          },
+        ],
+        explanation: `El tamaño diminuto, el pico fino y el fino barrado en alas y cola corresponden claramente a una Ratona común (Ratucha).${regionNote}`,
+        uncertaintyReason: null,
+        fromCache: false,
+        taxonomicSource: 'Catálogo Ornitológico eBird Argentina (es_AR)',
+        aiMode: 'demo_preset',
       };
 
     case 'clara_chingolo':
@@ -237,22 +459,23 @@ function buildCalibratedResponse(
             commonNameAr: 'Chingolo',
             scientificName: 'Zonotrichia capensis',
             confidenceBand: 'Muy probable',
-            reasoning: `Se distinguen con nitidez el semicopete gris con bandas negras y el característico collar canela rojizo en la nuca.${regionNote}`,
+            reasoning: `Se distinguen el semicopete gris con bandas negras y el característico collar canela rojizo en la nuca.${regionNote}`,
             keyVisibleTraits: ['Semicopete gris estriado', 'Collar nucal canela', 'Mejilla gris enmarcada'],
           },
           {
-            taxonId: 'redcre1',
-            commonNameAr: 'Cardenal común',
-            scientificName: 'Paroaria coronata',
+            taxonId: 'houspa',
+            commonNameAr: 'Gorrión',
+            scientificName: 'Passer domesticus',
             confidenceBand: 'Baja certeza',
-            reasoning: 'Comparte el hábito de buscar semillas en el suelo y presentar copete, aunque el cardenal tiene capuchón rojo vivo.',
-            keyVisibleTraits: ['Porte granívoro con copete'],
+            reasoning: 'También busca semillas en el suelo, pero el gorrión carece de semicopete y collar canela nucal.',
+            keyVisibleTraits: ['Porte granívoro compacto'],
           },
         ],
         explanation: `Los rasgos de la cabeza y el collar canela coinciden claramente con un Chingolo (Zonotrichia capensis).${regionNote}`,
         uncertaintyReason: null,
         fromCache: false,
         taxonomicSource: 'Catálogo Ornitológico eBird Argentina (es_AR)',
+        aiMode: 'demo_preset',
       };
 
     case 'clara_benteveo':
@@ -274,6 +497,7 @@ function buildCalibratedResponse(
         uncertaintyReason: null,
         fromCache: false,
         taxonomicSource: 'Catálogo Ornitológico eBird Argentina (es_AR)',
+        aiMode: 'demo_preset',
       };
 
     case 'clara_zorzal':
@@ -287,7 +511,7 @@ function buildCalibratedResponse(
             commonNameAr: 'Zorzal colorado',
             scientificName: 'Turdus rufiventris',
             confidenceBand: 'Muy probable',
-            reasoning: `Se observan claramente el vientre anaranjado rojizo, la garganta clara finamente estriada y el anillo ocular amarillo.${regionNote}`,
+            reasoning: `Se observan el vientre anaranjado rojizo, la garganta clara finamente estriada y el anillo ocular amarillo.${regionNote}`,
             keyVisibleTraits: ['Vientre rufo anaranjado', 'Garganta estriada', 'Anillo ocular amarillo'],
           },
         ],
@@ -295,6 +519,7 @@ function buildCalibratedResponse(
         uncertaintyReason: null,
         fromCache: false,
         taxonomicSource: 'Catálogo Ornitológico eBird Argentina (es_AR)',
+        aiMode: 'demo_preset',
       };
 
     case 'clara_hornero':
@@ -309,41 +534,56 @@ function buildCalibratedResponse(
             commonNameAr: 'Hornero común',
             scientificName: 'Furnarius rufus',
             confidenceBand: 'Muy probable',
-            reasoning: `Se distinguen el dorso pardo rojizo uniforme, la garganta clara, el pico esbelto levemente curvado y las patas largas de caminador.${regionNote}`,
-            keyVisibleTraits: ['Dorso pardo rufo cálido', 'Garganta clara', 'Pico esbelto levemente curvo'],
+            reasoning: `Dorso pardo rojizo uniforme sin barrado, garganta clara, pico esbelto levemente curvado y patas largas de caminador.${regionNote}`,
+            keyVisibleTraits: ['Dorso pardo rufo uniforme', 'Garganta clara', 'Pico esbelto levemente curvo'],
           },
           {
             taxonId: 'rubthr1',
             commonNameAr: 'Zorzal colorado',
             scientificName: 'Turdus rufiventris',
             confidenceBand: 'Baja certeza',
-            reasoning: 'También camina por el césped y tiene tonos rojizos, pero el zorzal los concentra en el vientre y tiene pico amarillo.',
+            reasoning: 'También camina por el césped, pero el zorzal tiene vientre anaranjado ladrillo y pico amarillo.',
             keyVisibleTraits: ['Ave terrícola de jardín'],
           },
         ],
-        explanation: `La silueta esbelta, el plumaje terroso rufo y el pico fino coinciden con alta seguridad con el Hornero común.${regionNote}`,
+        explanation: `La silueta esbelta, el plumaje terroso rufo uniforme y el pico fino coinciden con alta seguridad con el Hornero común.${regionNote}`,
         uncertaintyReason: null,
         fromCache: false,
         taxonomicSource: 'Catálogo Ornitológico eBird Argentina (es_AR)',
+        aiMode: 'demo_preset',
       };
   }
 }
 
 /**
  * Genera o reutiliza una lámina artística naturalista para una especie y estilo dados.
- * - Si ya existe una lámina para (taxonId, style) y no se pidió explícitamente otra versión, la reutiliza (CA16).
- * - Si Valeria pide otra versión (CA08), genera una nueva variante artística con pose/encuadre renovado sin perder la foto original.
+ * - Si ya existe una lámina para (taxonId, style) y no se pidió otra versión, la reutiliza.
+ * - Intenta primero generación real por IA (Google Gemini) cuando corresponde;
+ *   si no está configurada, usa la lámina dedicada de esa especie exacta o genera un estudio
+ *   botánico en Canvas a partir de la foto real verificada de ESA misma especie (nunca de otra!).
  */
 export async function generateOrReuseIllustration(params: {
   taxonId: string;
   style: IllustrationStyle;
   existingIllustrations: Illustration[];
   forceNewVersion?: boolean;
+  fallbackPhotoDataUrl?: string;
 }): Promise<{ illustration: Illustration; reused: boolean }> {
-  const { taxonId, style, existingIllustrations, forceNewVersion = false } = params;
+  const {
+    taxonId,
+    style,
+    existingIllustrations,
+    forceNewVersion = false,
+    fallbackPhotoDataUrl,
+  } = params;
 
   const matching = existingIllustrations
-    .filter((ill) => ill.taxonId === taxonId && ill.style === style)
+    .filter(
+      (ill) =>
+        ill.taxonId === taxonId &&
+        ill.style === style &&
+        !ill.imageUrl.includes('/api/image-proxy?')
+    )
     .sort((a, b) => b.version - a.version);
 
   if (!forceNewVersion && matching.length > 0) {
@@ -354,19 +594,105 @@ export async function generateOrReuseIllustration(params: {
   const species = findSpeciesByTaxonId(taxonId) || ARGENTINA_BIRDS_CATALOG[0];
   const nextVersion = matching.length > 0 ? matching[0].version + 1 : 1;
 
-  const basePlateUrl =
-    style === 'acuarela_naturalista' ? species.defaultWatercolorPlate : species.defaultGraphitePlate;
+  const dedicatedStaticPlate =
+    style === 'acuarela_naturalista'
+      ? species.defaultWatercolorPlate
+      : species.defaultGraphitePlate;
 
-  let finalImageUrl = basePlateUrl;
+  let finalImageUrl = '';
+  let modelProvider = 'Estudio Naturalista';
   let variationNote =
     nextVersion === 1
       ? style === 'acuarela_naturalista'
-        ? 'Lámina original en acuarela botánica sobre papel algodón cálido'
-        : 'Apunte de campo original en lápiz grafito 2B/4B sobre papel crema'
+        ? 'Lámina en acuarela botánica sobre papel algodón'
+        : 'Apunte de campo en lápiz grafito 2B/4B'
       : `Versión #${nextVersion} — Pose alternativa de estudio naturalista`;
 
-  if (nextVersion > 1) {
-    finalImageUrl = await createArtisticVariationPlateDataUrl(basePlateUrl, style, nextVersion);
+  // 1. Si no tiene lámina dedicada O se pidió nueva versión, intentar generación real con Gemini cuando está configurado
+  const shouldTryGeminiImage =
+    !isTestEnvironment() &&
+    cachedAiConfigured !== false &&
+    (!dedicatedStaticPlate || forceNewVersion);
+  if (shouldTryGeminiImage) {
+    try {
+      const res = await fetch(`${getApiBase()}/api/generate-illustration`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          commonNameAr: species.commonNameAr,
+          scientificName: species.scientificName,
+          identificationTraits: species.identificationTraits,
+          style,
+          version: nextVersion,
+        }),
+      });
+      if (res.ok) {
+        const gen = (await res.json()) as {
+          imageUrl?: string;
+          modelProvider?: string;
+          variationNote?: string;
+        };
+        if (gen.imageUrl) {
+          finalImageUrl = gen.imageUrl;
+          modelProvider = gen.modelProvider || 'Google Gemini — Ilustración Botánica';
+          variationNote = gen.variationNote || variationNote;
+        }
+      } else if (res.status === 503) {
+        cachedAiConfigured = false;
+      }
+    } catch {
+      // Continuar con fallback de alta fidelidad de la misma especie
+    }
+  }
+
+  // 2. Si tiene lámina dedicada para esta especie exacta
+  if (!finalImageUrl && dedicatedStaticPlate) {
+    finalImageUrl =
+      nextVersion > 1
+        ? await createArtisticPlateDataUrl(dedicatedStaticPlate, style, nextVersion, false, false)
+        : dedicatedStaticPlate;
+    modelProvider = 'Colección Botánica Birdy';
+  }
+
+  // 3. Si no tiene lámina estática propia (ej.: Ratona común sin GEMINI_API_KEY aún),
+  // crear un estudio botánico estilizado desde la foto real verificada de ESA especie en iNaturalist
+  // (jamás mostrar el dibujo de otra especie ni devolver una URL de proxy caída!).
+  if (!finalImageUrl) {
+    let sourceRefUrl = species.referencePhotos?.[0]?.url || species.referencePhotos?.[0]?.thumbUrl;
+    if (!sourceRefUrl && !isTestEnvironment()) {
+      const fetched = await fetchReferencePhotosForSpecies(species.scientificName);
+      sourceRefUrl = fetched[0]?.url || fetched[0]?.thumbUrl;
+    }
+
+    if (sourceRefUrl) {
+      finalImageUrl = await createArtisticPlateDataUrl(
+        sourceRefUrl,
+        style,
+        nextVersion,
+        true,
+        false
+      );
+      modelProvider =
+        style === 'acuarela_naturalista'
+          ? 'Estudio acuarelado desde referencia ornitológica'
+          : 'Estudio en grafito desde referencia ornitológica';
+      variationNote =
+        style === 'acuarela_naturalista'
+          ? 'Lámina de estudio naturalista (activá Gemini para acuarela pintada por IA)'
+          : 'Apunte de estudio en grafito (activá Gemini para dibujo por IA)';
+    } else if (fallbackPhotoDataUrl) {
+      finalImageUrl = await createArtisticPlateDataUrl(
+        fallbackPhotoDataUrl,
+        style,
+        nextVersion,
+        true,
+        false
+      );
+      modelProvider = 'Estudio naturalista desde fotografía';
+    } else {
+      finalImageUrl = createFallbackBotanicalMonogramPlate(species, style);
+      modelProvider = 'Lámina tipográfica de campo';
+    }
   }
 
   consumptionMetrics.illustrationsGenerated += 1;
@@ -379,9 +705,9 @@ export async function generateOrReuseIllustration(params: {
     version: nextVersion,
     promptSummary:
       style === 'acuarela_naturalista'
-        ? `Ilustración ornitológica en acuarela naturalista de ${species.commonNameAr} (${species.scientificName}), fidelidad morfológica, sin texto embebido.`
-        : `Apunte de campo en lápiz grafito de ${species.commonNameAr} (${species.scientificName}), sombreado naturalista por tramado, sin texto embebido.`,
-    modelProvider: 'Google Imagen 3 — Estudio Naturalista',
+        ? `Ilustración ornitológica en acuarela naturalista de ${species.commonNameAr} (${species.scientificName}), sin texto embebido.`
+        : `Apunte de campo en lápiz grafito de ${species.commonNameAr} (${species.scientificName}), sin texto embebido.`,
+    modelProvider,
     variationNote,
     createdAt: new Date().toISOString(),
   };
@@ -390,68 +716,148 @@ export async function generateOrReuseIllustration(params: {
 }
 
 /**
- * Crea una versión alternativa en alta resolución de la lámina cuando Valeria toca «Pedir otra versión» (CA08),
- * variando encuadre botánico, matiz de papel artesanal y orientación de la pose.
+ * Crea una versión alternativa o un estudio pictórico/grafito en Canvas
+ * respetando fielmente la morfología de la especie seleccionada.
  */
-async function createArtisticVariationPlateDataUrl(
+async function createArtisticPlateDataUrl(
   sourceUrl: string,
   style: IllustrationStyle,
-  version: number
+  version: number,
+  applyBotanicalFilter: boolean,
+  allowProxyFallback = false
 ): Promise<string> {
   if (
     typeof Image === 'undefined' ||
     typeof document === 'undefined' ||
-    (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent))
+    isTestEnvironment()
   ) {
-    return `${sourceUrl}?v=${version}`;
+    return `${sourceUrl}${sourceUrl.includes('?') ? '&' : '?'}v=${version}`;
   }
 
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        canvas.width = 900;
-        canvas.height = 900;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(`${sourceUrl}?v=${version}`);
-          return;
+  const renderFromUrl = (loadUrl: string): Promise<string | null> =>
+    new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        try {
+          const size = 900;
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(null);
+            return;
+          }
+
+          ctx.fillStyle = style === 'acuarela_naturalista' ? '#F6F0E2' : '#F3EFE6';
+          ctx.fillRect(0, 0, size, size);
+
+          const pad = applyBotanicalFilter ? 48 : 0;
+          const drawSize = size - pad * 2;
+          const imgRatio = (img.width || size) / (img.height || size);
+          let sx = 0;
+          let sy = 0;
+          let sw = img.width || size;
+          let sh = img.height || size;
+          if (imgRatio > 1) {
+            sw = img.height;
+            sx = (img.width - sw) / 2;
+          } else {
+            sh = img.width;
+            sy = (img.height - sh) / 2;
+          }
+
+          ctx.save();
+          ctx.translate(size / 2, size / 2);
+          if (version > 1 && version % 2 === 0) {
+            ctx.scale(-1.04, 1.04);
+          } else if (version > 1) {
+            ctx.scale(1.07, 1.07);
+            ctx.rotate(-0.02);
+          }
+
+          if (applyBotanicalFilter) {
+            ctx.filter =
+              style === 'acuarela_naturalista'
+                ? 'saturate(1.16) contrast(0.95) brightness(1.05) sepia(0.14)'
+                : 'grayscale(1) contrast(1.22) brightness(1.06) sepia(0.08)';
+          }
+
+          ctx.drawImage(
+            img,
+            sx,
+            sy,
+            sw,
+            sh,
+            -drawSize / 2,
+            -drawSize / 2,
+            drawSize,
+            drawSize
+          );
+          ctx.restore();
+
+          const grad = ctx.createRadialGradient(
+            size / 2,
+            size / 2,
+            size * 0.28,
+            size / 2,
+            size / 2,
+            size * 0.52
+          );
+          grad.addColorStop(0, 'rgba(247, 243, 232, 0)');
+          grad.addColorStop(
+            1,
+            style === 'acuarela_naturalista'
+              ? 'rgba(246, 240, 226, 0.88)'
+              : 'rgba(243, 239, 230, 0.90)'
+          );
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, size, size);
+
+          ctx.strokeStyle =
+            style === 'acuarela_naturalista'
+              ? 'rgba(56, 87, 62, 0.26)'
+              : 'rgba(60, 56, 50, 0.30)';
+          ctx.lineWidth = 2.5;
+          ctx.strokeRect(26, 26, size - 52, size - 52);
+
+          resolve(canvas.toDataURL('image/jpeg', 0.91));
+        } catch {
+          resolve(null);
         }
+      };
+      img.onerror = () => resolve(null);
+      img.src = loadUrl;
+    });
 
-        // Fondo de papel artesanal cálido
-        ctx.fillStyle = style === 'acuarela_naturalista' ? '#F6F0E2' : '#F3EFE6';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // 1. Intentar directamente (rápido y con CORS si el origen lo soporta)
+  const directRendered = await renderFromUrl(sourceUrl);
+  if (directRendered) return directRendered;
 
-        ctx.save();
-        ctx.translate(canvas.width / 2, canvas.height / 2);
-        if (version % 2 === 0) {
-          ctx.scale(-1.04, 1.04); // Pose mirando hacia el perfil opuesto y encuadre cercano
-        } else {
-          ctx.scale(1.08, 1.08);
-          ctx.rotate(-0.025);
-        }
-        ctx.drawImage(img, -canvas.width / 2, -canvas.height / 2, canvas.width, canvas.height);
-        ctx.restore();
+  // 2. Si el origen remoto no permitió exportar Canvas, intentar proxy solo para renderizar en Canvas
+  if (allowProxyFallback && /^https:\/\//i.test(sourceUrl)) {
+    const proxied = await renderFromUrl(getProxiedImageUrl(sourceUrl));
+    if (proxied) return proxied;
+  }
 
-        // Viñeta botánica sutil y marco de estudio de campo
-        const grad = ctx.createRadialGradient(450, 450, 260, 450, 450, 450);
-        grad.addColorStop(0, 'rgba(247, 243, 232, 0)');
-        grad.addColorStop(1, style === 'acuarela_naturalista' ? 'rgba(226, 214, 190, 0.38)' : 'rgba(215, 209, 196, 0.42)');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // 3. Fallback garantizado: siempre devolver la URL directa original (nunca un /api/image-proxy fallido)
+  return sourceUrl;
+}
 
-        ctx.strokeStyle = style === 'acuarela_naturalista' ? 'rgba(92, 83, 70, 0.22)' : 'rgba(60, 56, 50, 0.28)';
-        ctx.lineWidth = 3;
-        ctx.strokeRect(28, 28, canvas.width - 56, canvas.height - 56);
-
-        resolve(canvas.toDataURL('image/jpeg', 0.92));
-      } catch {
-        resolve(`${sourceUrl}?v=${version}`);
-      }
-    };
-    img.onerror = () => resolve(`${sourceUrl}?v=${version}`);
-    img.src = sourceUrl;
-  });
+function createFallbackBotanicalMonogramPlate(
+  species: SpeciesCatalogEntry,
+  style: IllustrationStyle
+): string {
+  const bg = style === 'acuarela_naturalista' ? '#F6F0E2' : '#F3EFE6';
+  const stroke = style === 'acuarela_naturalista' ? '#38573E' : '#4D4840';
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
+    <rect width="800" height="800" fill="${bg}"/>
+    <rect x="34" y="34" width="732" height="732" fill="none" stroke="${stroke}" stroke-opacity="0.28" stroke-width="2"/>
+    <circle cx="400" cy="360" r="140" fill="${stroke}" fill-opacity="0.08"/>
+    <text x="400" y="385" text-anchor="middle" font-family="Georgia, serif" font-size="108" fill="${stroke}" fill-opacity="0.5">🪶</text>
+    <text x="400" y="560" text-anchor="middle" font-family="Georgia, serif" font-size="38" fill="#27221E">${species.commonNameAr.replace(/&/g, '&amp;')}</text>
+    <text x="400" y="608" text-anchor="middle" font-family="Georgia, serif" font-style="italic" font-size="26" fill="${stroke}">${species.scientificName.replace(/&/g, '&amp;')}</text>
+  </svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }

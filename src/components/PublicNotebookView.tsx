@@ -1,7 +1,20 @@
-import React, { useState } from 'react';
-import { BookOpen, Calendar, Feather, Lock, MapPin, ShieldCheck, Sparkles, ArrowLeft } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  BookOpen,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Feather,
+  Lock,
+  MapPin,
+  ShieldCheck,
+  Sparkles,
+  ZoomIn,
+} from 'lucide-react';
 import { fetchPublicNotebookByToken } from '../services/storageAndSyncService';
 import { PublicSanitizedSheet } from '../types/domain';
+import { ImageLightbox, LightboxItem } from './ImageLightbox';
 
 interface PublicNotebookViewProps {
   shareToken: string;
@@ -14,24 +27,52 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
 }) => {
   const lookup = fetchPublicNotebookByToken(shareToken);
   const [selectedSheet, setSelectedSheet] = useState<PublicSanitizedSheet | null>(null);
+  const [showFieldNotes, setShowFieldNotes] = useState<boolean>(false);
+  const [lightboxState, setLightboxState] = useState<{
+    items: LightboxItem[];
+    index: number;
+  } | null>(null);
+
+  const guestBackRef = useRef({ lightboxState, selectedSheet, onExitPublicPreview });
+  guestBackRef.current = { lightboxState, selectedSheet, onExitPublicPreview };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.history.pushState({ birdyPublicGuard: true }, '');
+    const handlePop = () => {
+      const cur = guestBackRef.current;
+      if (cur.lightboxState) {
+        setLightboxState(null);
+        window.history.pushState({ birdyPublicGuard: true }, '');
+      } else if (cur.selectedSheet) {
+        setSelectedSheet(null);
+        setShowFieldNotes(false);
+        window.history.pushState({ birdyPublicGuard: true }, '');
+      } else if (cur.onExitPublicPreview) {
+        cur.onExitPublicPreview();
+      }
+    };
+    window.addEventListener('popstate', handlePop);
+    return () => window.removeEventListener('popstate', handlePop);
+  }, []);
 
   if (lookup.status !== 'ok') {
     return (
       <div className="app-shell">
         <div className="notebook-page" style={{ textAlign: 'center', padding: '42px 24px' }}>
           <Lock size={44} color="#B26249" style={{ marginBottom: 12 }} />
-          <h1 className="serif-heading" style={{ fontSize: '2rem' }}>
+          <h1 className="serif-heading" style={{ fontSize: '1.9rem' }}>
             {lookup.status === 'revoked'
               ? 'Este enlace compartido fue revocado'
               : 'Cuaderno compartido no disponible'}
           </h1>
           <p style={{ color: 'var(--ink-secondary)', maxWidth: 520, margin: '10px auto 22px' }}>
             {lookup.status === 'revoked'
-              ? 'La autora del cuaderno desactivó este enlace público. Las láminas y registros protegidos ya no están disponibles desde esta dirección.'
+              ? 'La autora del cuaderno desactivó este enlace público. Las láminas y registros ya no están disponibles desde esta dirección.'
               : 'No encontramos un cuaderno activo asociado a este enlace.'}
           </p>
           {onExitPublicPreview && (
-            <button className="btn btn-primary" onClick={onExitPublicPreview}>
+            <button type="button" className="btn btn-primary" onClick={onExitPublicPreview}>
               <ArrowLeft size={18} /> Volver a mi Cuaderno de Aves
             </button>
           )}
@@ -42,156 +83,223 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
 
   const { notebook } = lookup;
 
+  const openSheetLightbox = (sheet: PublicSanitizedSheet, initialIndex = 0) => {
+    const items: LightboxItem[] = [
+      {
+        url: sheet.illustrationUrl,
+        title: sheet.commonNameAr,
+        subtitle: sheet.scientificName,
+        badge:
+          sheet.illustrationStyle === 'acuarela_naturalista'
+            ? 'Lámina en acuarela'
+            : 'Apunte en grafito',
+      },
+      ...sheet.publicPhotos.map((url, idx) => ({
+        url,
+        title: `Registro fotográfico #${idx + 1}`,
+        subtitle: `${sheet.commonNameAr} · ${notebook.title}`,
+        badge: 'Foto real',
+      })),
+    ];
+    setLightboxState({ items, index: initialIndex });
+  };
+
   return (
     <div className="app-shell">
       <header className="top-header">
         <div className="brand-title">
-          <Feather size={26} color="#38573E" />
+          <Feather size={22} color="#38573E" />
           <div>
             <h1>{notebook.title}</h1>
             <span className="brand-subtitle">
-              Cuaderno naturalista de {notebook.ownerDisplayName} · Vista de invitado (solo lectura)
+              Cuaderno de {notebook.ownerDisplayName} · Solo lectura
             </span>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span className="badge badge-sync-respaldado" title="Sin coordenadas ni metadatos privados">
-            <ShieldCheck size={14} /> Vista pública protegida
+            <ShieldCheck size={13} /> Protegido
           </span>
           {onExitPublicPreview && (
-            <button className="btn btn-secondary" onClick={onExitPublicPreview}>
-              <ArrowLeft size={16} /> Volver a la app de Valeria
+            <button
+              type="button"
+              className="btn btn-secondary btn-compact"
+              onClick={onExitPublicPreview}
+            >
+              <ArrowLeft size={15} /> Volver
             </button>
           )}
         </div>
       </header>
 
-      {/* Portada del cuaderno compartido */}
-      <section className={`notebook-page style-${notebook.style}`}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <span className="badge badge-sync-respaldado" style={{ marginBottom: 8 }}>
-              <Sparkles size={13} />{' '}
-              {notebook.style === 'acuarela_naturalista'
-                ? 'Colección en Acuarela Naturalista'
-                : 'Colección en Lápiz Grafito'}
-            </span>
-            <h2 className="serif-heading" style={{ fontSize: '2.1rem' }}>
-              {notebook.title}
-            </h2>
-            {notebook.description && (
-              <p style={{ margin: '6px 0 10px', color: 'var(--ink-secondary)' }}>
-                {notebook.description}
-              </p>
-            )}
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: '0.9rem', color: 'var(--ink-muted)' }}>
-              {notebook.generalLocation && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <MapPin size={15} /> Lugar general: {notebook.generalLocation}
-                </span>
-              )}
-              {notebook.period && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <Calendar size={15} /> Período: {notebook.period}
-                </span>
-              )}
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <BookOpen size={15} /> {notebook.sheets.length}{' '}
-                {notebook.sheets.length === 1 ? 'especie descubierta' : 'especies descubiertas'}
+      {/* Portada compacta */}
+      {!selectedSheet && (
+        <section className={`notebook-page style-${notebook.style}`}>
+          <span className="badge badge-sync-respaldado" style={{ marginBottom: 8 }}>
+            <Sparkles size={13} />{' '}
+            {notebook.style === 'acuarela_naturalista' ? 'Acuarela naturalista' : 'Lápiz grafito'}
+          </span>
+          <h2 className="serif-heading" style={{ fontSize: '1.9rem', margin: '2px 0 6px' }}>
+            {notebook.title}
+          </h2>
+          {notebook.description && (
+            <p style={{ margin: '0 0 10px', color: 'var(--ink-secondary)', fontSize: '0.94rem' }}>
+              {notebook.description}
+            </p>
+          )}
+          <div className="meta-row">
+            {notebook.generalLocation && (
+              <span>
+                <MapPin size={14} /> {notebook.generalLocation}
               </span>
-            </div>
+            )}
+            {notebook.period && (
+              <span>
+                <Calendar size={14} /> {notebook.period}
+              </span>
+            )}
+            <span>
+              <BookOpen size={14} /> {notebook.sheets.length}{' '}
+              {notebook.sheets.length === 1 ? 'especie' : 'especies'}
+            </span>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {selectedSheet ? (
         <article className={`notebook-page style-${notebook.style}`}>
           <button
-            className="btn btn-secondary"
-            style={{ marginBottom: 16 }}
-            onClick={() => setSelectedSheet(null)}
-          >
-            <ArrowLeft size={16} /> Volver al índice del cuaderno
-          </button>
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-              gap: 24,
-              alignItems: 'start',
+            type="button"
+            className="btn btn-secondary btn-compact"
+            style={{ marginBottom: 14 }}
+            onClick={() => {
+              setSelectedSheet(null);
+              setShowFieldNotes(false);
             }}
           >
-            <div className={`plate-frame style-${selectedSheet.illustrationStyle}`}>
+            <ArrowLeft size={15} /> Volver al índice
+          </button>
+
+          {/* Encabezado limpio de especie */}
+          <div style={{ marginBottom: 14 }}>
+            <h2 className="serif-heading" style={{ fontSize: '2rem', margin: 0, lineHeight: 1.1 }}>
+              {selectedSheet.commonNameAr}
+            </h2>
+            <div className="scientific-name" style={{ fontSize: '1.15rem', marginTop: 2 }}>
+              {selectedSheet.scientificName}
+            </div>
+            <div className="sheet-meta-line">
+              <span>{selectedSheet.firstObservedDateOnly}</span>
+              <span>·</span>
+              <span>
+                {selectedSheet.sightingsCount}{' '}
+                {selectedSheet.sightingsCount === 1 ? 'avistamiento' : 'avistamientos'}
+              </span>
+            </div>
+          </div>
+
+          {/* Protagonistas visuales: Lámina + Fotos compartidas (ampliables) */}
+          <div className="sheet-hero-showcase">
+            <button
+              type="button"
+              className={`plate-frame plate-clickable style-${selectedSheet.illustrationStyle}`}
+              onClick={() => openSheetLightbox(selectedSheet, 0)}
+              aria-label={`Ampliar lámina de ${selectedSheet.commonNameAr}`}
+            >
               <img
                 src={selectedSheet.illustrationUrl}
                 alt={`Lámina de ${selectedSheet.commonNameAr}`}
               />
-            </div>
+              <span className="zoom-pill">
+                <ZoomIn size={13} /> Ampliar lámina
+              </span>
+            </button>
 
-            <div>
-              <span className="badge badge-sync-respaldado">{selectedSheet.family}</span>
-              <h2 className="serif-heading" style={{ fontSize: '2.2rem', marginTop: 8 }}>
-                {selectedSheet.commonNameAr}
-              </h2>
-              <p className="scientific-name" style={{ fontSize: '1.35rem', margin: '0 0 14px' }}>
-                {selectedSheet.scientificName}
-              </p>
-
-              <p style={{ fontSize: '0.9rem', color: 'var(--ink-muted)', marginBottom: 16 }}>
-                Registrada por primera vez en este cuaderno el {selectedSheet.firstObservedDateOnly} ·{' '}
-                {selectedSheet.sightingsCount}{' '}
-                {selectedSheet.sightingsCount === 1 ? 'avistamiento' : 'avistamientos'}
-              </p>
-
-              <div className="callout-box" style={{ marginBottom: 12 }}>
-                <strong>Cómo reconocerla:</strong> {selectedSheet.identificationTraits}
-              </div>
-              <div className="callout-box" style={{ marginBottom: 12 }}>
-                <strong>Comportamiento:</strong> {selectedSheet.typicalBehavior}
-              </div>
-              <div className="callout-box" style={{ marginBottom: 12 }}>
-                <strong>Alimentación y hábitat:</strong> {selectedSheet.dietAndHabitat}
-              </div>
-              <div className="callout-box">
-                <strong>Distribución:</strong> {selectedSheet.generalDistribution}
-              </div>
-
-              {notebook.includePersonalNotes && selectedSheet.publicNotes.length > 0 && (
-                <div style={{ marginTop: 18 }}>
-                  <h4 style={{ margin: '0 0 8px' }}>Apuntes de campo de {notebook.ownerDisplayName}</h4>
-                  {selectedSheet.publicNotes.map((n, idx) => (
-                    <div key={idx} className="callout-box" style={{ marginBottom: 8 }}>
-                      <div className="handwritten-note">«{n.note}»</div>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--ink-muted)' }}>{n.dateOnly}</div>
-                    </div>
+            {notebook.includeOriginalPhotos && selectedSheet.publicPhotos.length > 0 && (
+              <div className="hero-photo-strip">
+                <div className="hero-strip-label">Fotografías del registro (tocar para ampliar)</div>
+                <div className="hero-strip-row">
+                  {selectedSheet.publicPhotos.map((photoUrl, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      className="hero-photo-thumb"
+                      onClick={() => openSheetLightbox(selectedSheet, idx + 1)}
+                      aria-label={`Ampliar fotografía ${idx + 1}`}
+                    >
+                      <img src={photoUrl} alt={`Registro fotográfico ${idx + 1}`} />
+                      <span className="thumb-zoom-dot">
+                        <ZoomIn size={12} />
+                      </span>
+                    </button>
                   ))}
                 </div>
-              )}
+              </div>
+            )}
+          </div>
 
-              {notebook.includeOriginalPhotos && selectedSheet.publicPhotos.length > 0 && (
-                <div style={{ marginTop: 18 }}>
-                  <h4 style={{ margin: '0 0 8px' }}>Fotografías compartidas (sin metadatos EXIF)</h4>
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    {selectedSheet.publicPhotos.map((photoUrl, idx) => (
-                      <img
-                        key={idx}
-                        src={photoUrl}
-                        alt={`Registro fotográfico ${idx + 1}`}
-                        style={{
-                          width: 120,
-                          height: 120,
-                          objectFit: 'cover',
-                          borderRadius: 8,
-                          border: '2px solid var(--paper-edge)',
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
+          {/* Resumen acotado + Ficha desplegable */}
+          <div className="sheet-summary-card">
+            <p className="sheet-quick-summary">
+              {selectedSheet.quickSummary || selectedSheet.identificationTraits}
+            </p>
+            <div className="trait-chips-row">
+              {selectedSheet.sizeLabel && (
+                <span className="trait-chip">{selectedSheet.sizeLabel}</span>
+              )}
+              {selectedSheet.habitatTag && (
+                <span className="trait-chip">{selectedSheet.habitatTag}</span>
+              )}
+              {selectedSheet.dietTag && (
+                <span className="trait-chip">{selectedSheet.dietTag}</span>
               )}
             </div>
+
+            <button
+              type="button"
+              className="accordion-toggle-btn"
+              onClick={() => setShowFieldNotes((prev) => !prev)}
+              aria-expanded={showFieldNotes}
+            >
+              <span>Ficha de campo</span>
+              {showFieldNotes ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+            </button>
+
+            {showFieldNotes && (
+              <div className="field-guide-grid">
+                <div className="field-guide-item">
+                  <strong>Cómo reconocerla</strong>
+                  <p>{selectedSheet.identificationTraits}</p>
+                </div>
+                <div className="field-guide-item">
+                  <strong>Comportamiento</strong>
+                  <p>{selectedSheet.typicalBehavior}</p>
+                </div>
+                <div className="field-guide-item">
+                  <strong>Alimentación y hábitat</strong>
+                  <p>{selectedSheet.dietAndHabitat}</p>
+                </div>
+                <div className="field-guide-item">
+                  <strong>Distribución</strong>
+                  <p>{selectedSheet.generalDistribution}</p>
+                </div>
+              </div>
+            )}
           </div>
+
+          {notebook.includePersonalNotes && selectedSheet.publicNotes.length > 0 && (
+            <div style={{ marginTop: 18 }}>
+              <h3 className="serif-heading" style={{ fontSize: '1.35rem', marginBottom: 8 }}>
+                Apuntes de {notebook.ownerDisplayName}
+              </h3>
+              {selectedSheet.publicNotes.map((n, idx) => (
+                <div key={idx} className="callout-box" style={{ marginBottom: 8 }}>
+                  <div className="handwritten-note">«{n.note}»</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--ink-muted)' }}>{n.dateOnly}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </article>
       ) : (
         <section>
@@ -207,24 +315,28 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
                 <div
                   key={sheet.sheetId}
                   className="species-plate-card"
-                  onClick={() => setSelectedSheet(sheet)}
+                  onClick={() => {
+                    setSelectedSheet(sheet);
+                    setShowFieldNotes(false);
+                  }}
                   role="button"
                   tabIndex={0}
-                  onKeyDown={(e) => e.key === 'Enter' && setSelectedSheet(sheet)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      setSelectedSheet(sheet);
+                      setShowFieldNotes(false);
+                    }
+                  }}
                 >
                   <div className={`plate-frame style-${sheet.illustrationStyle}`}>
                     <img src={sheet.illustrationUrl} alt={sheet.commonNameAr} />
                   </div>
                   <div>
-                    <h3 className="serif-heading" style={{ fontSize: '1.35rem', margin: 0 }}>
-                      {sheet.commonNameAr}
-                    </h3>
-                    <div className="scientific-name" style={{ fontSize: '1rem' }}>
-                      {sheet.scientificName}
-                    </div>
-                    <div style={{ fontSize: '0.82rem', color: 'var(--ink-muted)', marginTop: 6 }}>
-                      Descubierta: {sheet.firstObservedDateOnly} · {sheet.sightingsCount}{' '}
-                      {sheet.sightingsCount === 1 ? 'registro' : 'registros'}
+                    <h3 className="serif-heading species-card-title">{sheet.commonNameAr}</h3>
+                    <div className="scientific-name species-card-sci">{sheet.scientificName}</div>
+                    <div className="species-card-foot">
+                      <span>{sheet.firstObservedDateOnly}</span>
+                      <span>{sheet.sightingsCount}×</span>
                     </div>
                   </div>
                 </div>
@@ -232,6 +344,14 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
             </div>
           )}
         </section>
+      )}
+
+      {lightboxState && (
+        <ImageLightbox
+          items={lightboxState.items}
+          initialIndex={lightboxState.index}
+          onClose={() => setLightboxState(null)}
+        />
       )}
     </div>
   );

@@ -35,10 +35,11 @@ La elección de PWA frente a Flutter o Capacitor está justificada en el [docume
 
 ## Estado actual
 
-- La app funciona **de forma autónoma en el navegador**: sin configuración usa un motor de identificación local con escenarios de demostración, un catálogo inicial de aves de Argentina (hornero, chingolo, benteveo, zorzal colorado, celestino, cardenal, calandria, chimango…) y láminas de ejemplo en [`public/plates/`](public/plates/).
-- El respaldo en la nube con cuenta de Google está **simulado** sobre IndexedDB; el SDK de Firebase y las reglas de Firestore ya están incluidos para conectarlo.
-- Si se define `VITE_BACKEND_API_URL`, la identificación se delega a `POST /api/identify-bird` en un backend seguro. [`server/secureAiProxy.ts`](server/secureAiProxy.ts) es la referencia de ese backend (prompts de identificación e ilustración).
-- La suite de criterios de aceptación (CA01–CA17) pasa completa.
+- **Identificación real con Google Gemini + referencias visuales reales de iNaturalist**: el servidor integrado en Vite (`/api/identify-bird`, `/api/generate-illustration`, `/api/bird-reference`) analiza fotografías reales con Gemini Vision y enriquece cada especie candidata con fotografías reales desde iNaturalist para compararlas lado a lado sin salir de la app.
+- **Catálogo de aves de Argentina ampliado**: incluye 28 especies frecuentes (ratona común/ratucha, hornero, chingolo, benteveo, zorzal colorado, calandrias, picaflores, tero, cotorra, carpinteros, cabecita negra, cardenal, celestino, etc.) más búsqueda en vivo en todo iNaturalist.
+- **Si aún no configuraste `GEMINI_API_KEY`**: la app nunca adivina especies al azar; te avisa con claridad y te permite buscar y comparar visualmente con fotos reales de aves de Argentina.
+- El respaldo en la nube con cuenta de Google sigue operando en modo local/simulado sobre IndexedDB; el SDK de Firebase y [`firestore.rules`](firestore.rules) ya están incluidos para conectarlo.
+- La suite de tests (`npm test`) verifica los criterios de aceptación (CA01–CA17) y las mejoras de comparación visual, ficha compacta y visor ampliado.
 
 ## Cómo ejecutarla
 
@@ -46,18 +47,22 @@ Requisitos: Node.js 22+.
 
 ```bash
 npm install          # instalar dependencias
-npm run dev          # servidor de desarrollo en http://localhost:5173 (también accesible desde el celular en la red local)
-npm test             # suite de criterios de aceptación CA01–CA17
+cp .env.example .env # agregar GEMINI_API_KEY en .env para activar visión e ilustraciones IA
+npm run dev          # servidor de desarrollo + endpoints seguros /api/* en http://localhost:5173
+npm test             # suite de tests automatizados
 npm run build        # build de producción en dist/
-npm run preview      # servir el build localmente
+npm run preview      # servir el build localmente (con endpoints /api/* activos)
 ```
 
-### Configuración opcional
+### Configuración de IA (Google Gemini)
 
-Copiar [`.env.example`](.env.example) a `.env` y completar lo que haga falta:
+Copiá [`.env.example`](.env.example) a `.env` y agregá tu clave de [Google AI Studio](https://aistudio.google.com/apikey):
 
 ```bash
-# Firebase (respaldo real con cuenta de Google)
+# Clave de servidor (nunca lleva prefijo VITE_ ni se expone al navegador)
+GEMINI_API_KEY=tu_clave_aqui
+
+# Opcional: Firebase (respaldo real con cuenta de Google)
 VITE_FIREBASE_API_KEY=
 VITE_FIREBASE_AUTH_DOMAIN=
 VITE_FIREBASE_PROJECT_ID=
@@ -65,11 +70,11 @@ VITE_FIREBASE_STORAGE_BUCKET=
 VITE_FIREBASE_MESSAGING_SENDER_ID=
 VITE_FIREBASE_APP_ID=
 
-# Backend seguro para IA y eBird
+# Opcional: backend separado si se despliega server/index.ts en otro host
 VITE_BACKEND_API_URL=
 ```
 
-> 🔒 Las claves de Gemini/Imagen y eBird (`GEMINI_API_KEY`, `EBIRD_API_KEY`) viven **solo en el servidor**, nunca en el cliente.
+> 🔒 `GEMINI_API_KEY` vive **solo en el servidor**, nunca en el cliente. Podés agregarla al archivo `.env` incluso con el servidor en marcha y se detecta automáticamente.
 
 ## Estructura del proyecto
 
