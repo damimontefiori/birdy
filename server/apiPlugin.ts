@@ -148,12 +148,23 @@ export async function handleBirdyApiRequest(
   // 1. Estado del servidor, IA y autenticación (sin exponer secretos ni correos)
   if (pathname === '/api/health' && method === 'GET') {
     const env = resolveServerEnv();
+    const imageFallbackProviders: string[] = [];
+    if (env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN) {
+      imageFallbackProviders.push('Cloudflare Workers AI (FLUX.1-schnell)');
+    }
+    if (env.HUGGINGFACE_API_KEY) {
+      imageFallbackProviders.push('Hugging Face (FLUX.1-schnell)');
+    }
     sendJson(res, 200, {
       ok: true,
       aiConfigured: Boolean(env.GEMINI_API_KEY),
+      illustrationCloudConfigured: Boolean(
+        env.GEMINI_API_KEY || imageFallbackProviders.length > 0
+      ),
+      imageFallbackProviders,
       provider: 'gemini',
       visionModel: env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
-      imageModel: env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image-preview',
+      imageModel: env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-lite-image',
       auth: getAuthConfigStatus(env),
     });
     return true;
@@ -341,7 +352,7 @@ export async function handleBirdyApiRequest(
       return true;
     }
 
-    if (!env.GEMINI_API_KEY) {
+    if (!env.GEMINI_API_KEY && !env.HUGGINGFACE_API_KEY && !env.CLOUDFLARE_API_TOKEN) {
       sendJson(res, 503, {
         error: 'GEMINI_API_KEY_MISSING',
         fallback: true,
@@ -377,9 +388,10 @@ export async function handleBirdyApiRequest(
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Error generando lámina';
+      const isQuota = msg.includes('GEMINI_IMAGE_QUOTA_EXCEEDED');
       console.error('[Birdy API] /api/generate-illustration error:', msg);
-      sendJson(res, 502, {
-        error: 'ILLUSTRATION_FAILED',
+      sendJson(res, isQuota ? 429 : 502, {
+        error: isQuota ? 'GEMINI_IMAGE_QUOTA_EXCEEDED' : 'ILLUSTRATION_FAILED',
         fallback: true,
         detail: msg.slice(0, 220),
       });

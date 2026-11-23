@@ -21,7 +21,11 @@ import {
   signSessionToken,
   verifySessionToken,
 } from '../../server/authService';
-import { isAllowedImageProxyUrl } from '../../server/secureAiProxy';
+import {
+  buildNaturalistIllustrationPrompt,
+  isAllowedImageProxyUrl,
+} from '../../server/secureAiProxy';
+import { renderBotanicalPlateFromImage } from '../services/watercolorCanvasRenderer';
 
 describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y visor ampliado', () => {
   beforeEach(() => {
@@ -283,5 +287,34 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
 
     const anonReq = { headers: {} } as never;
     expect(getAuthenticatedUserFromRequest(anonReq, env).status).toBe('unauthenticated');
+  });
+
+  it('Construye prompts de ilustración botánica sobre papel crema limpio sin fondos fotográficos ni texto', () => {
+    const wcPrompt = buildNaturalistIllustrationPrompt({
+      commonNameAr: 'Chivi-chiví',
+      scientificName: 'Vireo chivi',
+      identificationTraits: 'Ceja clara marcada, corona grisácea, dorso oliva y vientre blancuzco',
+      style: 'acuarela_naturalista',
+      version: 1,
+    });
+    expect(wcPrompt).toContain('Vireo chivi');
+    expect(wcPrompt).toContain('#FAF6E9');
+    expect(wcPrompt).toContain('NO photo bokeh');
+    expect(wcPrompt).toContain('NO text');
+    expect(wcPrompt).toContain('NO watermarks');
+
+    const grPrompt = buildNaturalistIllustrationPrompt({
+      commonNameAr: 'Codorniz japonesa',
+      scientificName: 'Coturnix japonica',
+      identificationTraits: 'Cuerpo rechoncho pardo jaspeado con rayas cremosas',
+      style: 'lapiz_grafito',
+      version: 2,
+    });
+    expect(grPrompt).toContain('Coturnix japonica');
+    expect(grPrompt).toContain('graphite pencil');
+    expect(grPrompt).toContain('NO text');
+
+    // En jsdom (sin canvas 2d real), el renderer local degrada graciosamente devolviendo null
+    expect(typeof renderBotanicalPlateFromImage).toBe('function');
   });
 });

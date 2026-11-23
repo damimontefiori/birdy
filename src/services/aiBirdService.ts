@@ -17,6 +17,7 @@ import {
   fetchReferencePhotosForSpecies,
   getProxiedImageUrl,
 } from './speciesReferenceService';
+import { renderBotanicalPlateFromImage } from './watercolorCanvasRenderer';
 
 export interface IdentificationRequest {
   photoSha256: string;
@@ -53,6 +54,8 @@ export interface IdentificationResponse {
 export interface BackendAiHealth {
   ok: boolean;
   aiConfigured: boolean;
+  illustrationCloudConfigured?: boolean;
+  imageFallbackProviders?: string[];
   provider: string;
   visionModel?: string;
   imageModel?: string;
@@ -67,6 +70,7 @@ export interface BackendAiHealth {
 // Caché idempotente por hash SHA-256 para evitar consumos duplicados por reintentos accidentales
 const identificationCache = new Map<string, IdentificationResponse>();
 let cachedAiConfigured: boolean | null = null;
+let cachedIllustrationCloudConfigured: boolean | null = null;
 
 export interface AIConsumptionMetrics {
   identificationsExecuted: number;
@@ -109,12 +113,16 @@ export async function checkBackendAiHealth(): Promise<BackendAiHealth> {
     if (res.ok) {
       const data = (await res.json()) as BackendAiHealth;
       cachedAiConfigured = Boolean(data.aiConfigured);
+      cachedIllustrationCloudConfigured = Boolean(
+        data.illustrationCloudConfigured ?? data.aiConfigured
+      );
       return data;
     }
   } catch {
     // Servidor no disponible
   }
   cachedAiConfigured = false;
+  cachedIllustrationCloudConfigured = false;
   return { ok: false, aiConfigured: false, provider: 'gemini' };
 }
 
@@ -653,12 +661,13 @@ export async function generateOrReuseIllustration(params: {
         : 'Apunte de campo en lápiz grafito 2B/4B'
       : `Versión #${nextVersion} — Pose alternativa de estudio naturalista`;
 
-  // 1. Si no tiene lámina dedicada O se pidió nueva versión, intentar generación real con Gemini cuando está configurado
-  const shouldTryGeminiImage =
+  // 1. Si no tiene lámina dedicada O se pidió nueva versión, intentar generación real por IA en el servidor
+  let geminiImageQuotaExceeded = false;
+  const shouldTryCloudImage =
     !isTestEnvironment() &&
-    cachedAiConfigured !== false &&
+    cachedIllustrationCloudConfigured !== false &&
     (!dedicatedStaticPlate || forceNewVersion);
-  if (shouldTryGeminiImage) {
+  if (shouldTryCloudImage) {
     try {
       const res = await fetch(`${getApiBase()}/api/generate-illustration`, {
         method: 'POST',
@@ -683,11 +692,13 @@ export async function generateOrReuseIllustration(params: {
           modelProvider = gen.modelProvider || 'Google Gemini — Ilustración Botánica';
           variationNote = gen.variationNote || variationNote;
         }
+      } else if (res.status === 429) {
+        geminiImageQuotaExceeded = true;
       } else if (res.status === 503) {
-        cachedAiConfigured = false;
+        cachedIllustrationCloudConfigured = false;
       }
     } catch {
-      // Continuar con fallback de alta fidelidad de la misma especie
+      // Continuar con motor local de acuarela/grafito de la misma especie
     }
   }
 
@@ -700,9 +711,9 @@ export async function generateOrReuseIllustration(params: {
     modelProvider = 'Colección Botánica Birdy';
   }
 
-  // 3. Si no tiene lámina estática propia (ej.: Ratona común sin GEMINI_API_KEY aún),
-  // crear un estudio botánico estilizado desde la foto real verificada de ESA especie en iNaturalist
-  // (jamás mostrar el dibujo de otra especie ni devolver una URL de proxy caída!).
+  // 3. Si no tiene lámina estática propia (o el proveedor cloud no devolvió imagen),
+  // sintetizar una lámina real en acuarela/tinta sepia o lápiz grafito con el motor Canvas local
+  // a partir de la fotografía verificada de ESA misma especie (nunca de otra).
   if (!finalImageUrl) {
     let sourceRefUrl = species.referencePhotos?.[0]?.url || species.referencePhotos?.[0]?.thumbUrl;
     if (!sourceRefUrl && !isTestEnvironment()) {
@@ -711,21 +722,44 @@ export async function generateOrReuseIllustration(params: {
     }
 
     if (sourceRefUrl) {
-      finalImageUrl = await createArtisticPlateDataUrl(
+      const paintedFromRef = await createArtisticPlateDataUrl(
         sourceRefUrl,
         style,
         nextVersion,
         true,
-        false
+        true
       );
-      modelProvider =
-        style === 'acuarela_naturalista'
-          ? 'Estudio acuarelado desde referencia ornitológica'
-          : 'Estudio en grafito desde referencia ornitológica';
-      variationNote =
-        style === 'acuarela_naturalista'
-          ? 'Lámina de estudio naturalista (activá Gemini para acuarela pintada por IA)'
-          : 'Apunte de estudio en grafito (activá Gemini para dibujo por IA)';
+      // Si la foto remota no pudo leerse en Canvas (ej.: sin conexión) y tenemos foto del usuario, pintar desde ella
+      if (
+        !isTestEnvironment() &&
+        !paintedFromRef.startsWith('data:') &&
+        fallbackPhotoDataUrl
+      ) {
+        finalImageUrl = await createArtisticPlateDataUrl(
+          fallbackPhotoDataUrl,
+          style,
+          nextVersion,
+          true,
+          false
+        );
+      } else {
+        finalImageUrl = paintedFromRef;
+      }
+
+      modelProvider = geminiImageQuotaExceeded
+        ? style === 'acuarela_naturalista'
+          ? 'Acuarela botánica local (Gemini sin cuota de imagen)'
+          : 'Grafito botánico local (Gemini sin cuota de imagen)'
+        : style === 'acuarela_naturalista'
+          ? 'Acuarela botánica local'
+          : 'Apunte en grafito local';
+      variationNote = geminiImageQuotaExceeded
+        ? style === 'acuarela_naturalista'
+          ? 'Acuarela botánica local (agregá HUGGINGFACE_API_KEY gratis o facturación en Gemini para pintura 100% IA)'
+          : 'Grafito botánico local (agregá HUGGINGFACE_API_KEY gratis o facturación en Gemini para dibujo 100% IA)'
+        : style === 'acuarela_naturalista'
+          ? 'Lámina en acuarela botánica sobre papel algodón'
+          : 'Apunte de campo en lápiz grafito 2B/4B';
     } else if (fallbackPhotoDataUrl) {
       finalImageUrl = await createArtisticPlateDataUrl(
         fallbackPhotoDataUrl,
@@ -734,7 +768,10 @@ export async function generateOrReuseIllustration(params: {
         true,
         false
       );
-      modelProvider = 'Estudio naturalista desde fotografía';
+      modelProvider =
+        style === 'acuarela_naturalista'
+          ? 'Acuarela botánica desde fotografía'
+          : 'Apunte en grafito desde fotografía';
     } else {
       finalImageUrl = createFallbackBotanicalMonogramPlate(species, style);
       modelProvider = 'Lámina tipográfica de campo';
@@ -786,6 +823,15 @@ async function createArtisticPlateDataUrl(
       img.crossOrigin = 'anonymous';
       img.onload = () => {
         try {
+          // Para fotos reales sin lámina pintada, ejecutar el motor pictórico real
+          // (Kuwahara de 2 pasadas + tinta sepia + disolución de bokeh / grafito Color-Dodge)
+          if (applyBotanicalFilter) {
+            const painted = renderBotanicalPlateFromImage(img, style, version);
+            resolve(painted);
+            return;
+          }
+
+          // Para láminas de acuarela/grafito ya pintadas a las que se les pide otra versión
           const size = 900;
           const canvas = document.createElement('canvas');
           canvas.width = size;
@@ -796,11 +842,9 @@ async function createArtisticPlateDataUrl(
             return;
           }
 
-          ctx.fillStyle = style === 'acuarela_naturalista' ? '#F6F0E2' : '#F3EFE6';
+          ctx.fillStyle = style === 'acuarela_naturalista' ? '#FAF5E8' : '#F6F2E8';
           ctx.fillRect(0, 0, size, size);
 
-          const pad = applyBotanicalFilter ? 48 : 0;
-          const drawSize = size - pad * 2;
           const imgRatio = (img.width || size) / (img.height || size);
           let sx = 0;
           let sy = 0;
@@ -823,52 +867,10 @@ async function createArtisticPlateDataUrl(
             ctx.rotate(-0.02);
           }
 
-          if (applyBotanicalFilter) {
-            ctx.filter =
-              style === 'acuarela_naturalista'
-                ? 'saturate(1.16) contrast(0.95) brightness(1.05) sepia(0.14)'
-                : 'grayscale(1) contrast(1.22) brightness(1.06) sepia(0.08)';
-          }
-
-          ctx.drawImage(
-            img,
-            sx,
-            sy,
-            sw,
-            sh,
-            -drawSize / 2,
-            -drawSize / 2,
-            drawSize,
-            drawSize
-          );
+          ctx.drawImage(img, sx, sy, sw, sh, -size / 2, -size / 2, size, size);
           ctx.restore();
 
-          const grad = ctx.createRadialGradient(
-            size / 2,
-            size / 2,
-            size * 0.28,
-            size / 2,
-            size / 2,
-            size * 0.52
-          );
-          grad.addColorStop(0, 'rgba(247, 243, 232, 0)');
-          grad.addColorStop(
-            1,
-            style === 'acuarela_naturalista'
-              ? 'rgba(246, 240, 226, 0.88)'
-              : 'rgba(243, 239, 230, 0.90)'
-          );
-          ctx.fillStyle = grad;
-          ctx.fillRect(0, 0, size, size);
-
-          ctx.strokeStyle =
-            style === 'acuarela_naturalista'
-              ? 'rgba(56, 87, 62, 0.26)'
-              : 'rgba(60, 56, 50, 0.30)';
-          ctx.lineWidth = 2.5;
-          ctx.strokeRect(26, 26, size - 52, size - 52);
-
-          resolve(canvas.toDataURL('image/jpeg', 0.91));
+          resolve(canvas.toDataURL('image/jpeg', 0.92));
         } catch {
           resolve(null);
         }

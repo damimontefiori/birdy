@@ -64,6 +64,9 @@ export interface ServerEnv {
   GEMINI_API_KEY?: string;
   GEMINI_VISION_MODEL?: string;
   GEMINI_IMAGE_MODEL?: string;
+  HUGGINGFACE_API_KEY?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
   EBIRD_API_KEY?: string;
   GOOGLE_CLIENT_ID?: string;
   ALLOWED_EMAILS?: string;
@@ -94,6 +97,7 @@ const ALLOWED_IMAGE_PROXY_HOSTS = new Set([
 
 const DEFAULT_VISION_MODELS = ['gemini-2.5-flash', 'gemini-3-flash-preview', 'gemini-2.0-flash'];
 const DEFAULT_IMAGE_MODELS = [
+  'gemini-3.1-flash-lite-image',
   'gemini-3.1-flash-image-preview',
   'gemini-3.1-flash-image',
   'gemini-2.5-flash-image',
@@ -140,6 +144,20 @@ export function resolveServerEnv(cwd: string = process.cwd()): ServerEnv {
       (process.env.GEMINI_VISION_MODEL || fileVars.GEMINI_VISION_MODEL || '').trim() || undefined,
     GEMINI_IMAGE_MODEL:
       (process.env.GEMINI_IMAGE_MODEL || fileVars.GEMINI_IMAGE_MODEL || '').trim() || undefined,
+    HUGGINGFACE_API_KEY:
+      (
+        process.env.HUGGINGFACE_API_KEY ||
+        fileVars.HUGGINGFACE_API_KEY ||
+        process.env.HF_TOKEN ||
+        fileVars.HF_TOKEN ||
+        ''
+      ).trim() || undefined,
+    CLOUDFLARE_ACCOUNT_ID:
+      (process.env.CLOUDFLARE_ACCOUNT_ID || fileVars.CLOUDFLARE_ACCOUNT_ID || '').trim() ||
+      undefined,
+    CLOUDFLARE_API_TOKEN:
+      (process.env.CLOUDFLARE_API_TOKEN || fileVars.CLOUDFLARE_API_TOKEN || '').trim() ||
+      undefined,
     EBIRD_API_KEY: (process.env.EBIRD_API_KEY || fileVars.EBIRD_API_KEY || '').trim() || undefined,
     GOOGLE_CLIENT_ID:
       (
@@ -185,26 +203,28 @@ export function buildNaturalistIllustrationPrompt(params: {
   const poseHint =
     params.version && params.version > 1
       ? params.version % 2 === 0
-        ? 'Show the bird in a lively three-quarter profile looking slightly to the left, perched naturally on a slender twig with subtle native leaves.'
-        : 'Show the bird in an alert side profile with head gently turned, perched delicately on a botanical branch with tiny buds.'
-      : 'Show the bird in a natural, graceful side profile perched on a delicate native Argentine twig with subtle botanical leaves.';
+        ? 'Perched in a lively three-quarter profile facing left on a slender diagonal twig with small olive-green botanical leaves and tiny pale buds.'
+        : 'Perched in a graceful alert side profile with head turned slightly on a delicate native branch with sparse fine leaves.'
+      : 'Perched naturally in clean side profile on a slender diagonal botanical twig with delicate small olive-green leaves and tiny pale buds.';
 
   if (params.style === 'acuarela_naturalista') {
     return [
-      `Museum-grade traditional botanical and ornithological watercolor illustration of ${params.scientificName} (${params.commonNameAr}, bird of Argentina).`,
-      `Strict anatomical and plumage accuracy is mandatory: ${params.identificationTraits}.`,
+      `Classic 19th-century ornithological field-guide watercolor illustration of ${params.scientificName} (${params.commonNameAr}, bird of South America).`,
+      `Strict anatomical and plumage accuracy: ${params.identificationTraits}.`,
       poseHint,
-      `Painted on warm cream cotton watercolor paper (#F7F3E8) with luminous translucent watercolor washes, delicate fine-brush feather texture, generous clean paper margins around the subject.`,
-      `Strictly NO text, NO typography, NO labels, NO Latin names, NO signatures, NO borders, NO watermarks anywhere in the image.`,
+      `Isolated subject centered on a completely clean, empty, uncluttered warm ivory cotton watercolor paper background (#FAF6E9) — NO scenery, NO sky, NO forest background, NO photo bokeh.`,
+      `Fine hand-drawn dark sepia botanical ink outlines with delicate translucent watercolor washes, crisp layered feather brushwork, authentic vintage naturalist sketchbook plate.`,
+      `Square 1:1 composition with generous clean cream paper margins. Strictly NO text, NO typography, NO Latin names, NO labels, NO frames, NO signatures, NO watermarks.`,
     ].join(' ');
   }
 
   return [
-    `Museum-grade traditional naturalist field-sketch illustration in graphite pencil (2B/4B) of ${params.scientificName} (${params.commonNameAr}, bird of Argentina).`,
-    `Strict anatomical and plumage accuracy is mandatory: ${params.identificationTraits}.`,
+    `Classic 19th-century naturalist field-sketch illustration in graphite pencil (2B/4B) of ${params.scientificName} (${params.commonNameAr}, bird of South America).`,
+    `Strict anatomical and plumage accuracy: ${params.identificationTraits}.`,
     poseHint,
-    `Drawn on warm cream archival sketchbook paper (#F5F1E8) with fine botanical pencil linework, delicate cross-hatching and realistic tonal shading, generous clean margins.`,
-    `Strictly NO text, NO typography, NO labels, NO Latin names, NO signatures, NO borders, NO watermarks anywhere in the image.`,
+    `Isolated subject centered on a completely clean, empty warm cream archival sketchbook paper background (#F5F1E8) — NO scenery background, NO photo bokeh.`,
+    `Monochrome fine graphite pencil linework, delicate cross-hatching, realistic feather tonal shading.`,
+    `Square 1:1 composition with generous clean paper margins. Strictly NO text, NO typography, NO labels, NO frames, NO signatures, NO watermarks.`,
   ].join(' ');
 }
 
@@ -677,8 +697,11 @@ export async function identifyBirdWithGemini(
 }
 
 /**
- * Genera una lámina botánica original en Acuarela Naturalista o Lápiz Grafito
- * usando la generación nativa de imágenes de Google Gemini.
+ * Genera una lámina botánica original en Acuarela Naturalista o Lápiz Grafito.
+ * Prioridad de proveedores en servidor:
+ * 1. Google Gemini (generación nativa de imágenes; requiere facturación habilitada en AI Studio).
+ * 2. Cloudflare Workers AI — FLUX.1-schnell (capa gratuita diaria sin tarjeta, si se configuró).
+ * 3. Hugging Face Inference — FLUX.1-schnell (token gratuito sin tarjeta, si se configuró).
  */
 export async function generateNaturalistPlateWithGemini(
   params: {
@@ -694,89 +717,181 @@ export async function generateNaturalistPlateWithGemini(
   modelProvider: string;
   variationNote: string;
 }> {
-  if (!env.GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY_MISSING');
-  }
-
   const prompt = buildNaturalistIllustrationPrompt(params);
-  const modelsToTry = Array.from(
-    new Set([env.GEMINI_IMAGE_MODEL, ...DEFAULT_IMAGE_MODELS].filter(Boolean) as string[])
-  );
-
   let lastError = '';
+  let sawGeminiQuotaError = false;
 
-  for (const model of modelsToTry) {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-      model
-    )}:generateContent`;
+  // 1. Google Gemini native image generation
+  if (env.GEMINI_API_KEY) {
+    const modelsToTry = Array.from(
+      new Set([env.GEMINI_IMAGE_MODEL, ...DEFAULT_IMAGE_MODELS].filter(Boolean) as string[])
+    );
 
-    const response = await serverFetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': env.GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: prompt }],
+    for (const model of modelsToTry) {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        model
+      )}:generateContent`;
+
+      try {
+        const response = await serverFetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': env.GEMINI_API_KEY,
           },
-        ],
-        generationConfig: {
-          responseModalities: ['TEXT', 'IMAGE'],
-          imageConfig: {
-            aspectRatio: '1:1',
-          },
-        },
-      }),
-      signal: AbortSignal.timeout(45000),
-    });
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts: [{ text: prompt }],
+              },
+            ],
+            generationConfig: {
+              responseModalities: ['TEXT', 'IMAGE'],
+            },
+          }),
+          signal: AbortSignal.timeout(45000),
+        });
 
-    if (!response.ok) {
-      const errBody = await response.text().catch(() => '');
-      lastError = `${model} (${response.status}): ${errBody.slice(0, 220)}`;
-      if ([400, 404, 429, 503].includes(response.status)) {
-        continue;
-      }
-      throw new Error(`GEMINI_IMAGE_ERROR: ${lastError}`);
-    }
+        if (!response.ok) {
+          const errBody = await response.text().catch(() => '');
+          if (response.status === 429) {
+            sawGeminiQuotaError = true;
+          }
+          lastError = `${model} (${response.status}): ${errBody.slice(0, 220)}`;
+          if ([400, 404, 429, 503].includes(response.status)) {
+            continue;
+          }
+          break;
+        }
 
-    const payload = (await response.json()) as {
-      candidates?: Array<{
-        content?: {
-          parts?: Array<{
-            inlineData?: { mimeType?: string; data?: string };
-            inline_data?: { mime_type?: string; data?: string };
+        const payload = (await response.json()) as {
+          candidates?: Array<{
+            content?: {
+              parts?: Array<{
+                inlineData?: { mimeType?: string; data?: string };
+                inline_data?: { mime_type?: string; data?: string };
+              }>;
+            };
           }>;
         };
-      }>;
-    };
 
-    const parts = payload.candidates?.[0]?.content?.parts || [];
-    for (const part of parts) {
-      const inline = part.inlineData || part.inline_data;
-      if (inline?.data) {
-        const mime =
-          ('mimeType' in inline && inline.mimeType) ||
-          ('mime_type' in inline && inline.mime_type) ||
-          'image/png';
-        return {
-          imageUrl: `data:${mime};base64,${inline.data}`,
-          modelProvider: `Google Gemini (${model})`,
-          variationNote:
-            (params.version || 1) > 1
-              ? `Versión #${params.version} — Ilustración alternativa generada con IA`
-              : params.style === 'acuarela_naturalista'
-                ? 'Lámina en acuarela botánica sobre papel algodón'
-                : 'Apunte de campo en lápiz grafito 2B/4B',
-        };
+        const parts = payload.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          const inline = part.inlineData || part.inline_data;
+          if (inline?.data) {
+            const mime =
+              ('mimeType' in inline && inline.mimeType) ||
+              ('mime_type' in inline && inline.mime_type) ||
+              'image/png';
+            return {
+              imageUrl: `data:${mime};base64,${inline.data}`,
+              modelProvider: `Google Gemini (${model})`,
+              variationNote:
+                (params.version || 1) > 1
+                  ? `Versión #${params.version} — Lámina original generada con Gemini`
+                  : params.style === 'acuarela_naturalista'
+                    ? 'Lámina original en acuarela botánica sobre papel algodón'
+                    : 'Apunte de campo original en lápiz grafito 2B/4B',
+            };
+          }
+        }
+        lastError = `${model}: no devolvió imagen en la respuesta`;
+      } catch (err) {
+        lastError = `${model}: ${err instanceof Error ? err.message : 'error de red'}`;
       }
     }
-
-    lastError = `${model}: no devolvió imagen en la respuesta`;
   }
 
+  // 2. Respaldo gratuito sin marca de agua: Cloudflare Workers AI (FLUX.1-schnell)
+  if (env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN) {
+    try {
+      const cfUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(
+        env.CLOUDFLARE_ACCOUNT_ID
+      )}/ai/run/@cf/black-forest-labs/flux-1-schnell`;
+      const cfRes = await serverFetch(cfUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prompt, steps: 6 }),
+        signal: AbortSignal.timeout(35000),
+      });
+      if (cfRes.ok) {
+        const cfJson = (await cfRes.json()) as { result?: { image?: string } };
+        if (cfJson.result?.image) {
+          return {
+            imageUrl: `data:image/jpeg;base64,${cfJson.result.image}`,
+            modelProvider: 'Cloudflare Workers AI (FLUX.1-schnell)',
+            variationNote:
+              (params.version || 1) > 1
+                ? `Versión #${params.version} — Lámina botánica generada con IA`
+                : params.style === 'acuarela_naturalista'
+                  ? 'Lámina en acuarela botánica sobre papel algodón'
+                  : 'Apunte de campo en lápiz grafito 2B/4B',
+          };
+        }
+      } else {
+        lastError = `Cloudflare AI (${cfRes.status}): ${(await cfRes.text().catch(() => '')).slice(0, 180)}`;
+      }
+    } catch (err) {
+      lastError = `Cloudflare AI: ${err instanceof Error ? err.message : 'error'}`;
+    }
+  }
+
+  // 3. Respaldo gratuito sin tarjeta ni marca de agua: Hugging Face Inference (FLUX.1-schnell)
+  if (env.HUGGINGFACE_API_KEY) {
+    try {
+      const hfRes = await serverFetch(
+        'https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${env.HUGGINGFACE_API_KEY}`,
+            'Content-Type': 'application/json',
+            Accept: 'image/jpeg',
+          },
+          body: JSON.stringify({
+            inputs: prompt,
+            parameters: {
+              width: 768,
+              height: 768,
+              num_inference_steps: 4,
+            },
+          }),
+          signal: AbortSignal.timeout(40000),
+        }
+      );
+      if (hfRes.ok) {
+        const ct = hfRes.headers.get('content-type') || 'image/jpeg';
+        if (ct.startsWith('image/')) {
+          const buf = Buffer.from(await hfRes.arrayBuffer());
+          return {
+            imageUrl: `data:${ct};base64,${buf.toString('base64')}`,
+            modelProvider: 'Hugging Face (FLUX.1-schnell)',
+            variationNote:
+              (params.version || 1) > 1
+                ? `Versión #${params.version} — Lámina botánica generada con IA`
+                : params.style === 'acuarela_naturalista'
+                  ? 'Lámina en acuarela botánica sobre papel algodón'
+                  : 'Apunte de campo en lápiz grafito 2B/4B',
+          };
+        }
+      } else {
+        lastError = `Hugging Face (${hfRes.status}): ${(await hfRes.text().catch(() => '')).slice(0, 180)}`;
+      }
+    } catch (err) {
+      lastError = `Hugging Face: ${err instanceof Error ? err.message : 'error'}`;
+    }
+  }
+
+  if (sawGeminiQuotaError) {
+    throw new Error(`GEMINI_IMAGE_QUOTA_EXCEEDED: ${lastError}`);
+  }
+  if (!env.GEMINI_API_KEY && !env.HUGGINGFACE_API_KEY && !env.CLOUDFLARE_API_TOKEN) {
+    throw new Error('GEMINI_API_KEY_MISSING');
+  }
   throw new Error(`GEMINI_IMAGE_FAILED: ${lastError}`);
 }
 

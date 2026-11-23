@@ -3661,10 +3661,27 @@ export const App: React.FC = () => {
               </button>
             </div>
             {aiHealth?.aiConfigured ? (
-              <p style={{ margin: '6px 0 0', fontSize: '0.84rem', color: 'var(--ink-secondary)' }}>
-                Conectado y listo ({aiHealth.visionModel}) + referencias visuales reales de
-                iNaturalist.
-              </p>
+              <div style={{ marginTop: 6, fontSize: '0.84rem', color: 'var(--ink-secondary)' }}>
+                <p style={{ margin: 0 }}>
+                  Visión conectada ({aiHealth.visionModel}) + referencias visuales reales de
+                  iNaturalist.
+                </p>
+                <p style={{ margin: '4px 0 0', fontSize: '0.8rem' }}>
+                  {aiHealth.imageFallbackProviders && aiHealth.imageFallbackProviders.length > 0 ? (
+                    <>
+                      Acuarelas IA: <strong>Gemini + {aiHealth.imageFallbackProviders.join(' / ')}</strong>{' '}
+                      activos.
+                    </>
+                  ) : (
+                    <>
+                      Acuarelas: <strong>Gemini</strong> (requiere cuota de imagen) con respaldo
+                      automático de <strong>acuarela botánica local</strong>. Para pintura 100%
+                      IA sin tarjeta, podés agregar <code>HUGGINGFACE_API_KEY</code> en el
+                      servidor.
+                    </>
+                  )}
+                </p>
+              </div>
             ) : (
               <p style={{ margin: '6px 0 0', fontSize: '0.84rem', color: '#5A4010' }}>
                 Todavía falta agregar <code>GEMINI_API_KEY</code> en el archivo <code>.env</code>{' '}
