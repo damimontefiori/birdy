@@ -1,6 +1,7 @@
 import {
   findSpeciesByTaxonId,
   getCustomSpeciesList,
+  getSpeciesGroup,
   hydrateCustomSpecies,
 } from '../data/argentinaBirdsCatalog';
 import {
@@ -243,9 +244,9 @@ export async function rehydrateSightingPhotosFromIndexedDb(
 export async function exportFullBackupJson(state: AppPersistedState): Promise<string> {
   const hydratedSightings = await rehydrateSightingPhotosFromIndexedDb(state.sightings);
   const payload = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAt: new Date().toISOString(),
-    app: 'Birdy — Cuaderno de Aves',
+    app: 'Bioma — Cuaderno vivo de jardín y naturaleza',
     state: {
       ...state,
       sightings: hydratedSightings,
@@ -507,6 +508,7 @@ export function publishOrUpdateSanitizedNotebookProjection(
       return {
         sheetId: sh.id,
         taxonId: sh.taxonId,
+        organismGroup: getSpeciesGroup(species),
         commonNameAr: species.commonNameAr,
         scientificName: species.scientificName,
         family: species.family,
@@ -514,6 +516,8 @@ export function publishOrUpdateSanitizedNotebookProjection(
         sizeLabel: species.sizeLabel,
         habitatTag: species.habitatTag,
         dietTag: species.dietTag,
+        ecologicalRole: species.ecologicalRole,
+        coexistenceNote: species.coexistenceNote,
         identificationTraits: species.identificationTraits,
         typicalBehavior: species.typicalBehavior,
         dietAndHabitat: species.dietAndHabitat,

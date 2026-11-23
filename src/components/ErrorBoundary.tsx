@@ -19,7 +19,7 @@ export class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error): void {
-    console.error('[Birdy] Error de interfaz capturado:', error);
+    console.error('[Bioma] Error de interfaz capturado:', error);
   }
 
   render() {

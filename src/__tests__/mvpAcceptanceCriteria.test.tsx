@@ -47,10 +47,10 @@ describe('Cuaderno de Aves MVP — Verificación de Criterios de Aceptación (CA
     });
     fireEvent.click(createBtn);
 
-    // Ve el cuaderno recién creado con acción clara «Registrar mi primera ave» (F01.4)
-    expect(screen.getByText('Aves de mi jardín')).toBeInTheDocument();
+    // Ve el cuaderno recién creado con acción clara «Registrar mi primer hallazgo» (F01.4)
+    expect(screen.getByText('Vida de mi jardín')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /Registrar mi primera ave/i })
+      screen.getByRole('button', { name: /Registrar mi primer hallazgo/i })
     ).toBeInTheDocument();
 
     // CA09: Crear un segundo cuaderno de viaje independiente
@@ -78,7 +78,7 @@ describe('Cuaderno de Aves MVP — Verificación de Criterios de Aceptación (CA
       screen.getByRole('button', { name: /Crear cuaderno y abrir portada/i })
     );
     fireEvent.click(
-      screen.getByRole('button', { name: /Registrar mi primera ave/i })
+      screen.getByRole('button', { name: /Registrar mi primer hallazgo/i })
     );
 
     // 1. Probar foto con EXIF (fecha + GPS)
@@ -177,7 +177,7 @@ describe('Cuaderno de Aves MVP — Verificación de Criterios de Aceptación (CA
 
     // Primer Hornero
     fireEvent.click(
-      screen.getByRole('button', { name: /Registrar mi primera ave/i })
+      screen.getByRole('button', { name: /Registrar mi primer hallazgo/i })
     );
     fireEvent.click(
       screen.getByRole('button', {
@@ -191,7 +191,7 @@ describe('Cuaderno de Aves MVP — Verificación de Criterios de Aceptación (CA
     });
 
     fireEvent.click(
-      screen.getByRole('button', { name: /Confirmar foto e identificar ave/i })
+      screen.getByRole('button', { name: /Confirmar foto e identificar especie/i })
     );
 
     const confirmHorneroBtn = await screen.findByRole(
@@ -222,7 +222,7 @@ describe('Cuaderno de Aves MVP — Verificación de Criterios de Aceptación (CA
       })
     );
     fireEvent.click(
-      screen.getByRole('button', { name: /Confirmar foto e identificar ave/i })
+      screen.getByRole('button', { name: /Confirmar foto e identificar especie/i })
     );
 
     const confirmSecondBtn = await screen.findByRole(

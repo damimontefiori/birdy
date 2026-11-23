@@ -2,6 +2,85 @@ export type IllustrationStyle = 'acuarela_naturalista' | 'lapiz_grafito';
 
 export type NotebookType = 'jardin' | 'viaje';
 
+export type OrganismGroup =
+  | 'aves'
+  | 'mariposas'
+  | 'abejas_abejorros'
+  | 'insectos_aracnidos'
+  | 'fauna_vecina';
+
+export interface OrganismGroupMeta {
+  id: OrganismGroup;
+  label: string;
+  shortLabel: string;
+  singularLabel: string;
+  emoji: string;
+  accentBg: string;
+  accentText: string;
+  accentBorder: string;
+}
+
+export const ORGANISM_GROUPS_ORDER: OrganismGroup[] = [
+  'aves',
+  'mariposas',
+  'abejas_abejorros',
+  'insectos_aracnidos',
+  'fauna_vecina',
+];
+
+export const ORGANISM_GROUP_META: Record<OrganismGroup, OrganismGroupMeta> = {
+  aves: {
+    id: 'aves',
+    label: 'Aves',
+    shortLabel: 'Aves',
+    singularLabel: 'Ave',
+    emoji: '🪶',
+    accentBg: '#EBF2EC',
+    accentText: '#2A4A30',
+    accentBorder: 'rgba(56, 87, 62, 0.28)',
+  },
+  mariposas: {
+    id: 'mariposas',
+    label: 'Mariposas',
+    shortLabel: 'Mariposas',
+    singularLabel: 'Mariposa',
+    emoji: '🦋',
+    accentBg: '#F6EEE1',
+    accentText: '#7D4B16',
+    accentBorder: 'rgba(166, 108, 42, 0.30)',
+  },
+  abejas_abejorros: {
+    id: 'abejas_abejorros',
+    label: 'Abejas y abejorros',
+    shortLabel: 'Abejas',
+    singularLabel: 'Polinizador',
+    emoji: '🐝',
+    accentBg: '#FBF3D9',
+    accentText: '#6F520F',
+    accentBorder: 'rgba(176, 134, 28, 0.32)',
+  },
+  insectos_aracnidos: {
+    id: 'insectos_aracnidos',
+    label: 'Insectos y arácnidos',
+    shortLabel: 'Insectos',
+    singularLabel: 'Insecto / arácnido',
+    emoji: '🐞',
+    accentBg: '#F3ECE7',
+    accentText: '#6B3B2B',
+    accentBorder: 'rgba(143, 81, 61, 0.28)',
+  },
+  fauna_vecina: {
+    id: 'fauna_vecina',
+    label: 'Fauna vecina',
+    shortLabel: 'Fauna',
+    singularLabel: 'Fauna vecina',
+    emoji: '🦎',
+    accentBg: '#EAEFF2',
+    accentText: '#2F4D5D',
+    accentBorder: 'rgba(65, 103, 122, 0.28)',
+  },
+};
+
 export type IdentificationStatus =
   | 'pendiente_identificacion'
   | 'requiere_confirmacion'
@@ -55,6 +134,7 @@ export interface SpeciesReferencePhoto {
 
 export interface SpeciesCatalogEntry {
   taxonId: string;
+  organismGroup?: OrganismGroup;
   scientificName: string;
   commonNameAr: string;
   alternativeNames: string[];
@@ -63,6 +143,8 @@ export interface SpeciesCatalogEntry {
   sizeLabel?: string;
   habitatTag?: string;
   dietTag?: string;
+  ecologicalRole?: string;
+  coexistenceNote?: string;
   identificationTraits: string;
   typicalBehavior: string;
   dietAndHabitat: string;
@@ -89,6 +171,7 @@ export interface Illustration {
 
 export interface AICandidate {
   taxonId: string;
+  organismGroup?: OrganismGroup;
   commonNameAr: string;
   scientificName: string;
   alternativeNames?: string[];
@@ -100,6 +183,8 @@ export interface AICandidate {
   sizeLabel?: string;
   habitatTag?: string;
   dietTag?: string;
+  ecologicalRole?: string;
+  coexistenceNote?: string;
   identificationTraits?: string;
   typicalBehavior?: string;
   dietAndHabitat?: string;
@@ -165,6 +250,7 @@ export interface NotebookSpeciesSheet {
 export interface PublicSanitizedSheet {
   sheetId: string;
   taxonId: string;
+  organismGroup?: OrganismGroup;
   commonNameAr: string;
   scientificName: string;
   family: string;
@@ -172,6 +258,8 @@ export interface PublicSanitizedSheet {
   sizeLabel?: string;
   habitatTag?: string;
   dietTag?: string;
+  ecologicalRole?: string;
+  coexistenceNote?: string;
   identificationTraits: string;
   typicalBehavior: string;
   dietAndHabitat: string;

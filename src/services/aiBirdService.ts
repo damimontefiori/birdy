@@ -3,6 +3,8 @@ import {
   buildStableTaxonIdFromScientificName,
   findSpeciesByScientificName,
   findSpeciesByTaxonId,
+  getSpeciesGroup,
+  inferOrganismGroupFromMeta,
   registerCustomSpecies,
 } from '../data/argentinaBirdsCatalog';
 import {
@@ -11,6 +13,7 @@ import {
   IdentificationStatus,
   Illustration,
   IllustrationStyle,
+  ORGANISM_GROUP_META,
   SpeciesCatalogEntry,
 } from '../types/domain';
 import {
@@ -145,6 +148,7 @@ function normalizeAndRegisterCandidate(raw: AICandidate): AICandidate {
     return {
       ...raw,
       taxonId: updated.taxonId,
+      organismGroup: getSpeciesGroup(existing),
       commonNameAr: existing.commonNameAr || raw.commonNameAr,
       scientificName: updated.scientificName,
       alternativeNames: existing.alternativeNames.length
@@ -155,26 +159,37 @@ function normalizeAndRegisterCandidate(raw: AICandidate): AICandidate {
       sizeLabel: existing.sizeLabel || raw.sizeLabel,
       habitatTag: existing.habitatTag || raw.habitatTag,
       dietTag: existing.dietTag || raw.dietTag,
+      ecologicalRole: existing.ecologicalRole || raw.ecologicalRole,
+      coexistenceNote: existing.coexistenceNote || raw.coexistenceNote,
       referencePhotos: updated.referencePhotos || raw.referencePhotos,
       wikipediaUrl: updated.wikipediaUrl || raw.wikipediaUrl,
     };
   }
 
+  const resolvedGroup = inferOrganismGroupFromMeta({
+    organismGroup: raw.organismGroup,
+    scientificName: raw.scientificName,
+    commonName: raw.commonNameAr,
+    family: raw.family,
+  });
   const stableId = buildStableTaxonIdFromScientificName(raw.scientificName);
   const newEntry: SpeciesCatalogEntry = {
     taxonId: stableId,
+    organismGroup: resolvedGroup,
     scientificName: raw.scientificName,
     commonNameAr: raw.commonNameAr,
     alternativeNames: raw.alternativeNames || [],
-    family: raw.family || 'Aves',
+    family: raw.family || 'Fauna',
     quickSummary: raw.quickSummary || raw.reasoning,
     sizeLabel: raw.sizeLabel,
     habitatTag: raw.habitatTag,
     dietTag: raw.dietTag,
+    ecologicalRole: raw.ecologicalRole,
+    coexistenceNote: raw.coexistenceNote,
     identificationTraits: raw.identificationTraits || raw.quickSummary || raw.reasoning,
     typicalBehavior: raw.typicalBehavior || 'Observación registrada mediante identificación asistida por IA.',
     dietAndHabitat: raw.dietAndHabitat || raw.habitatTag || 'Información disponible según región.',
-    generalDistribution: raw.generalDistribution || 'Avifauna registrada en Argentina.',
+    generalDistribution: raw.generalDistribution || 'Fauna registrada en Argentina.',
     typicalRegionsAr: [],
     referencePhotos: raw.referencePhotos || [],
     wikipediaUrl: raw.wikipediaUrl,
@@ -184,6 +199,7 @@ function normalizeAndRegisterCandidate(raw: AICandidate): AICandidate {
   return {
     ...raw,
     taxonId: stableId,
+    organismGroup: resolvedGroup,
   };
 }
 
@@ -281,7 +297,7 @@ export async function identifyBirdFromPhoto(
             errPayload.message ||
             'Necesitás iniciar sesión con una cuenta de Google autorizada para usar la IA.',
           uncertaintyReason:
-            'El acceso a Google Gemini está restringido a las cuentas habilitadas de Birdy.',
+            'El acceso a Google Gemini está restringido a las cuentas habilitadas de Bioma.',
           fromCache: false,
           taxonomicSource: 'Acceso protegido con Google',
           aiMode: 'error',
@@ -316,7 +332,7 @@ export async function identifyBirdFromPhoto(
           explanation:
             'El reconocimiento automático de fotografías con Google Gemini aún no está activado en el servidor.',
           uncertaintyReason:
-            'Para identificar cualquier ave real automáticamente (como una ratona común, zorzal o picaflor), agregá tu GEMINI_API_KEY en el archivo .env del proyecto. Mientras tanto, no adivinamos ninguna especie: podés buscarla abajo con fotos reales de referencia o dejarla en Pendientes.',
+            'Para identificar automáticamente cualquier especie real de tu jardín (aves, mariposas, abejas, abejorros, insectos o fauna vecina), agregá tu GEMINI_API_KEY en el servidor. Mientras tanto, no adivinamos ninguna especie: podés buscarla abajo con fotos reales de referencia o dejarla en Pendientes.',
           fromCache: false,
           taxonomicSource: 'Motor de IA pendiente de configuración (GEMINI_API_KEY)',
           aiMode: 'unconfigured',
@@ -678,6 +694,7 @@ export async function generateOrReuseIllustration(params: {
           scientificName: species.scientificName,
           identificationTraits: species.identificationTraits,
           style,
+          organismGroup: getSpeciesGroup(species),
           version: nextVersion,
         }),
       });
@@ -708,7 +725,7 @@ export async function generateOrReuseIllustration(params: {
       nextVersion > 1
         ? await createArtisticPlateDataUrl(dedicatedStaticPlate, style, nextVersion, false, false)
         : dedicatedStaticPlate;
-    modelProvider = 'Colección Botánica Birdy';
+    modelProvider = 'Colección Botánica Bioma';
   }
 
   // 3. Si no tiene lámina estática propia (o el proveedor cloud no devolvió imagen),
@@ -788,7 +805,7 @@ export async function generateOrReuseIllustration(params: {
     version: nextVersion,
     promptSummary:
       style === 'acuarela_naturalista'
-        ? `Ilustración ornitológica en acuarela naturalista de ${species.commonNameAr} (${species.scientificName}), sin texto embebido.`
+        ? `Ilustración naturalista en acuarela botánica de ${species.commonNameAr} (${species.scientificName}), sin texto embebido.`
         : `Apunte de campo en lápiz grafito de ${species.commonNameAr} (${species.scientificName}), sin texto embebido.`,
     modelProvider,
     variationNote,
@@ -899,11 +916,12 @@ function createFallbackBotanicalMonogramPlate(
 ): string {
   const bg = style === 'acuarela_naturalista' ? '#F6F0E2' : '#F3EFE6';
   const stroke = style === 'acuarela_naturalista' ? '#38573E' : '#4D4840';
+  const emblem = ORGANISM_GROUP_META[getSpeciesGroup(species)].emoji;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
     <rect width="800" height="800" fill="${bg}"/>
     <rect x="34" y="34" width="732" height="732" fill="none" stroke="${stroke}" stroke-opacity="0.28" stroke-width="2"/>
     <circle cx="400" cy="360" r="140" fill="${stroke}" fill-opacity="0.08"/>
-    <text x="400" y="385" text-anchor="middle" font-family="Georgia, serif" font-size="108" fill="${stroke}" fill-opacity="0.5">🪶</text>
+    <text x="400" y="385" text-anchor="middle" font-family="Georgia, serif" font-size="108" fill="${stroke}" fill-opacity="0.65">${emblem}</text>
     <text x="400" y="560" text-anchor="middle" font-family="Georgia, serif" font-size="38" fill="#27221E">${species.commonNameAr.replace(/&/g, '&amp;')}</text>
     <text x="400" y="608" text-anchor="middle" font-family="Georgia, serif" font-style="italic" font-size="26" fill="${stroke}">${species.scientificName.replace(/&/g, '&amp;')}</text>
   </svg>`;

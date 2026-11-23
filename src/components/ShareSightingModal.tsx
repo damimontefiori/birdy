@@ -8,6 +8,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
+import { getSpeciesGroup } from '../data/argentinaBirdsCatalog';
 import {
   composeSocialShareCard,
   RenderedSocialCard,
@@ -48,6 +49,7 @@ export const ShareSightingModal: React.FC<ShareSightingModalProps> = ({
       variant,
       format,
       style,
+      organismGroup: getSpeciesGroup(species),
       commonNameAr: species.commonNameAr,
       scientificName: species.scientificName,
       family: species.family,
@@ -55,6 +57,7 @@ export const ShareSightingModal: React.FC<ShareSightingModalProps> = ({
       sizeLabel: species.sizeLabel,
       habitatTag: species.habitatTag,
       dietTag: species.dietTag,
+      ecologicalRole: species.ecologicalRole,
       includeSpeciesInfo,
       illustrationUrl,
       originalPhotoSanitizedUrl: sighting.sanitizedPhotoDataUrl,
@@ -183,7 +186,7 @@ export const ShareSightingModal: React.FC<ShareSightingModalProps> = ({
                   checked={includeSpeciesInfo}
                   onChange={(e) => setIncludeSpeciesInfo(e.target.checked)}
                 />
-                <span>Incluir ficha breve y datos del ave</span>
+                <span>Incluir ficha breve y rol en el jardín</span>
               </label>
 
               <label className="check-row">

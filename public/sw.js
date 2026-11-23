@@ -1,4 +1,4 @@
-const CACHE_NAME = 'birdy-pwa-v2';
+const CACHE_NAME = 'bioma-pwa-v1';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -31,8 +31,14 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
 
-  // Nunca cachear llamadas de API ni peticiones externas (iNaturalist / fuentes)
-  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
+  // Nunca cachear llamadas de API, peticiones externas ni módulos de desarrollo Vite
+  if (
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.startsWith('/node_modules/')
+  ) {
     return;
   }
 

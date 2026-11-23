@@ -4,13 +4,21 @@ import { App } from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './styles/botanical.css';
 
-// Registrar Service Worker en contextos seguros (HTTPS o localhost) para habilitar instalación PWA
+// Registrar Service Worker en producción (HTTPS) para habilitar instalación PWA;
+// en desarrollo limpiar SW previos para evitar caché obsoleto de módulos HMR
 if ('serviceWorker' in navigator && window.isSecureContext) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
-      // Fallo silencioso en entornos donde Service Worker esté restringido
+  if (import.meta.env.PROD) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+        // Fallo silencioso en entornos donde Service Worker esté restringido
+      });
     });
-  });
+  } else {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => regs.forEach((r) => void r.unregister()))
+      .catch(() => undefined);
+  }
 }
 
 // Comportamiento de aplicación nativa: evitar menús contextuales y zoom involuntario del navegador

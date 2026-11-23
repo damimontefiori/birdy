@@ -14,11 +14,13 @@ import {
   fetchINaturalistPhotosForSpecies,
   generateNaturalistPlateWithGemini,
   identifyBirdWithGemini,
+  inferServerOrganismGroup,
   isAllowedImageProxyUrl,
   resolveServerEnv,
   searchINaturalistBirds,
   serverFetch,
   type ServerEnv,
+  type ServerOrganismGroup,
 } from './secureAiProxy.ts';
 
 const MAX_BODY_BYTES = 12 * 1024 * 1024; // 12 MB
@@ -104,7 +106,7 @@ function enforceAiAuthGuard(
     clearSessionCookie(req, res);
     sendJson(res, 403, {
       error: 'EMAIL_NOT_ALLOWED',
-      message: `La cuenta ${sessionCheck.email} no está autorizada para usar la IA de Birdy.`,
+      message: `La cuenta ${sessionCheck.email} no está autorizada para usar la IA de Bioma.`,
     });
     return true;
   }
@@ -366,6 +368,7 @@ export async function handleBirdyApiRequest(
         scientificName?: string;
         identificationTraits?: string;
         style?: 'acuarela_naturalista' | 'lapiz_grafito';
+        organismGroup?: ServerOrganismGroup;
         version?: number;
       }>(req);
 
@@ -380,6 +383,11 @@ export async function handleBirdyApiRequest(
           scientificName: body.scientificName,
           identificationTraits: body.identificationTraits || body.commonNameAr,
           style: body.style === 'lapiz_grafito' ? 'lapiz_grafito' : 'acuarela_naturalista',
+          organismGroup: inferServerOrganismGroup({
+            organismGroup: body.organismGroup,
+            scientificName: body.scientificName,
+            commonName: body.commonNameAr,
+          }),
           version: body.version || 1,
         },
         env

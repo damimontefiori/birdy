@@ -5,15 +5,21 @@ import {
   Calendar,
   ChevronDown,
   ChevronUp,
-  Feather,
+  Leaf,
   Lock,
   MapPin,
   ShieldCheck,
   Sparkles,
+  Sprout,
   ZoomIn,
 } from 'lucide-react';
 import { fetchPublicNotebookByToken } from '../services/storageAndSyncService';
-import { PublicSanitizedSheet } from '../types/domain';
+import {
+  ORGANISM_GROUP_META,
+  ORGANISM_GROUPS_ORDER,
+  OrganismGroup,
+  PublicSanitizedSheet,
+} from '../types/domain';
 import { ImageLightbox, LightboxItem } from './ImageLightbox';
 
 interface PublicNotebookViewProps {
@@ -27,6 +33,7 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
 }) => {
   const lookup = fetchPublicNotebookByToken(shareToken);
   const [selectedSheet, setSelectedSheet] = useState<PublicSanitizedSheet | null>(null);
+  const [activeGroupFilter, setActiveGroupFilter] = useState<OrganismGroup | 'todos'>('todos');
   const [showFieldNotes, setShowFieldNotes] = useState<boolean>(false);
   const [lightboxState, setLightboxState] = useState<{
     items: LightboxItem[];
@@ -73,7 +80,7 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
           </p>
           {onExitPublicPreview && (
             <button type="button" className="btn btn-primary" onClick={onExitPublicPreview}>
-              <ArrowLeft size={18} /> Volver a mi Cuaderno de Aves
+              <ArrowLeft size={18} /> Volver a mi cuaderno Bioma
             </button>
           )}
         </div>
@@ -107,12 +114,14 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
   return (
     <div className="app-shell">
       <header className="top-header">
-        <div className="brand-title">
-          <Feather size={22} color="#38573E" />
-          <div>
-            <h1>{notebook.title}</h1>
+        <div className="brand-title" style={{ minWidth: 0 }}>
+          <Sprout size={22} color="#38573E" style={{ flexShrink: 0 }} />
+          <div style={{ minWidth: 0 }}>
+            <h1 style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {notebook.title}
+            </h1>
             <span className="brand-subtitle">
-              Cuaderno de {notebook.ownerDisplayName} · Solo lectura
+              Bioma de {notebook.ownerDisplayName} · Solo lectura
             </span>
           </div>
         </div>
@@ -182,6 +191,22 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
 
           {/* Encabezado limpio de especie */}
           <div style={{ marginBottom: 14 }}>
+            {(() => {
+              const gMeta = ORGANISM_GROUP_META[selectedSheet.organismGroup || 'aves'];
+              return (
+                <span
+                  className="group-pill"
+                  style={{
+                    background: gMeta.accentBg,
+                    color: gMeta.accentText,
+                    borderColor: gMeta.accentBorder,
+                    marginBottom: 6,
+                  }}
+                >
+                  {gMeta.emoji} {gMeta.label}
+                </span>
+              );
+            })()}
             <h2 className="serif-heading" style={{ fontSize: '2rem', margin: 0, lineHeight: 1.1 }}>
               {selectedSheet.commonNameAr}
             </h2>
@@ -255,6 +280,20 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
               )}
             </div>
 
+            {(selectedSheet.ecologicalRole || selectedSheet.coexistenceNote) && (
+              <div className="eco-role-card">
+                <div className="eco-role-header">
+                  <Leaf size={14} /> Rol en el jardín y convivencia
+                </div>
+                {selectedSheet.ecologicalRole && (
+                  <div className="eco-role-primary">{selectedSheet.ecologicalRole}</div>
+                )}
+                {selectedSheet.coexistenceNote && (
+                  <p className="eco-role-note">{selectedSheet.coexistenceNote}</p>
+                )}
+              </div>
+            )}
+
             <button
               type="button"
               className="accordion-toggle-btn"
@@ -310,38 +349,92 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
               </p>
             </div>
           ) : (
-            <div className="sheets-grid">
-              {notebook.sheets.map((sheet) => (
-                <div
-                  key={sheet.sheetId}
-                  className="species-plate-card"
-                  onClick={() => {
-                    setSelectedSheet(sheet);
-                    setShowFieldNotes(false);
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      setSelectedSheet(sheet);
-                      setShowFieldNotes(false);
-                    }
-                  }}
-                >
-                  <div className={`plate-frame style-${sheet.illustrationStyle}`}>
-                    <img src={sheet.illustrationUrl} alt={sheet.commonNameAr} />
+            <>
+              {(() => {
+                const counts = new Map<OrganismGroup, number>();
+                notebook.sheets.forEach((sh) => {
+                  const g = sh.organismGroup || 'aves';
+                  counts.set(g, (counts.get(g) || 0) + 1);
+                });
+                const presentGroups = ORGANISM_GROUPS_ORDER.filter((g) => (counts.get(g) || 0) > 0);
+                if (presentGroups.length <= 1) return null;
+                return (
+                  <div className="group-filter-bar" role="tablist" aria-label="Filtrar por grupo">
+                    <button
+                      type="button"
+                      className={`group-filter-chip ${activeGroupFilter === 'todos' ? 'active' : ''}`}
+                      onClick={() => setActiveGroupFilter('todos')}
+                    >
+                      🌿 Todo ({notebook.sheets.length})
+                    </button>
+                    {presentGroups.map((g) => {
+                      const meta = ORGANISM_GROUP_META[g];
+                      return (
+                        <button
+                          key={g}
+                          type="button"
+                          className={`group-filter-chip ${activeGroupFilter === g ? 'active' : ''}`}
+                          onClick={() => setActiveGroupFilter(g)}
+                        >
+                          {meta.emoji} {meta.shortLabel} ({counts.get(g) || 0})
+                        </button>
+                      );
+                    })}
                   </div>
-                  <div>
-                    <h3 className="serif-heading species-card-title">{sheet.commonNameAr}</h3>
-                    <div className="scientific-name species-card-sci">{sheet.scientificName}</div>
-                    <div className="species-card-foot">
-                      <span>{sheet.firstObservedDateOnly}</span>
-                      <span>{sheet.sightingsCount}×</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+                );
+              })()}
+              <div className="sheets-grid">
+                {notebook.sheets
+                  .filter(
+                    (sh) =>
+                      activeGroupFilter === 'todos' ||
+                      (sh.organismGroup || 'aves') === activeGroupFilter
+                  )
+                  .map((sheet) => {
+                    const gMeta = ORGANISM_GROUP_META[sheet.organismGroup || 'aves'];
+                    return (
+                      <div
+                        key={sheet.sheetId}
+                        className="species-plate-card"
+                        onClick={() => {
+                          setSelectedSheet(sheet);
+                          setShowFieldNotes(false);
+                        }}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            setSelectedSheet(sheet);
+                            setShowFieldNotes(false);
+                          }
+                        }}
+                      >
+                        <div className={`plate-frame style-${sheet.illustrationStyle}`}>
+                          <img src={sheet.illustrationUrl} alt={sheet.commonNameAr} />
+                          <span
+                            className="plate-group-corner-tag"
+                            style={{
+                              background: gMeta.accentBg,
+                              color: gMeta.accentText,
+                              borderColor: gMeta.accentBorder,
+                            }}
+                          >
+                            {gMeta.emoji} {gMeta.singularLabel}
+                          </span>
+                        </div>
+                        <div>
+                          <h3 className="serif-heading species-card-title">{sheet.commonNameAr}</h3>
+                          <div className="scientific-name species-card-sci">{sheet.scientificName}</div>
+                          <div className="species-card-foot">
+                            <span>{sheet.firstObservedDateOnly}</span>
+                            <span>{sheet.sightingsCount}×</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </>
           )}
         </section>
       )}

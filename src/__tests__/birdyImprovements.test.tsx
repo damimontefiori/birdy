@@ -5,8 +5,12 @@ import '@testing-library/jest-dom';
 import { App } from '../App';
 import {
   ARGENTINA_BIRDS_CATALOG,
+  BIOMA_ARGENTINA_CATALOG,
+  getSpeciesGroup,
+  inferOrganismGroupFromMeta,
   searchSpeciesCatalog,
 } from '../data/argentinaBirdsCatalog';
+import { ORGANISM_GROUPS_ORDER } from '../types/domain';
 import { identifyBirdFromPhoto } from '../services/aiBirdService';
 import {
   exportFullBackupJson,
@@ -23,6 +27,7 @@ import {
 } from '../../server/authService';
 import {
   buildNaturalistIllustrationPrompt,
+  inferServerOrganismGroup,
   isAllowedImageProxyUrl,
 } from '../../server/secureAiProxy';
 import { renderBotanicalPlateFromImage } from '../services/watercolorCanvasRenderer';
@@ -70,7 +75,7 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
 
     fireEvent.click(screen.getByRole('button', { name: /Ingresar con mi cuenta de Google/i }));
     fireEvent.click(screen.getByRole('button', { name: /Crear cuaderno y abrir portada/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Registrar mi primera ave/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Registrar mi primer hallazgo/i }));
 
     // Seleccionar foto de ejemplo con duda para probar comparación visual
     fireEvent.click(
@@ -78,7 +83,7 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
         name: /Ave a contraluz \(Con duda · Comparar candidatas\)/i,
       })
     );
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar foto e identificar ave/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Confirmar foto e identificar especie/i }));
 
     // Abrir el comparador visual lado a lado desde una candidata
     const compareButtons = await screen.findAllByRole(
@@ -150,12 +155,12 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
 
     fireEvent.click(screen.getByRole('button', { name: /Ingresar con mi cuenta de Google/i }));
     fireEvent.click(screen.getByRole('button', { name: /Crear cuaderno y abrir portada/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Registrar mi primera ave/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Registrar mi primer hallazgo/i }));
 
     // Estamos en add_sighting -> Atrás vuelve al cuaderno (notebook_detail)
     fireEvent(window, new PopStateEvent('popstate'));
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Registrar mi primera ave/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Registrar mi primer hallazgo/i })).toBeInTheDocument();
     });
 
     // Abrir modal Compartir cuaderno -> Atrás cierra el modal sin salir del cuaderno
@@ -180,7 +185,7 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
     // Atrás en el inicio mantiene dentro de la app y avisa
     fireEvent(window, new PopStateEvent('popstate'));
     await waitFor(() => {
-      expect(screen.getByText(/Ya estás en el inicio de Birdy/i)).toBeInTheDocument();
+      expect(screen.getByText(/Ya estás en el inicio de Bioma/i)).toBeInTheDocument();
     });
   });
 
@@ -316,5 +321,55 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
 
     // En jsdom (sin canvas 2d real), el renderer local degrada graciosamente devolviendo null
     expect(typeof renderBotanicalPlateFromImage).toBe('function');
+  });
+
+  it('Cubre los 5 grupos de Bioma Argentina con rol ecológico, apodos locales y prompts adaptados por grupo', () => {
+    for (const group of ORGANISM_GROUPS_ORDER) {
+      const items = BIOMA_ARGENTINA_CATALOG.filter((sp) => getSpeciesGroup(sp) === group);
+      expect(items.length).toBeGreaterThanOrEqual(5);
+      expect(items.every((sp) => Boolean(sp.ecologicalRole && sp.coexistenceNote))).toBe(true);
+    }
+
+    // Búsqueda por apodos argentinos en todos los grupos
+    expect(searchSpeciesCatalog('manganga').some((s) => s.scientificName === 'Xylocopa augusti')).toBe(true);
+    expect(searchSpeciesCatalog('espejitos').some((s) => s.scientificName === 'Agraulis vanillae')).toBe(true);
+    expect(searchSpeciesCatalog('mamboreta').some((s) => s.scientificName === 'Coptopteryx argentina')).toBe(true);
+    expect(searchSpeciesCatalog('salamanquesa').some((s) => s.scientificName === 'Hemidactylus mabouia')).toBe(true);
+
+    // Inferencia automática de grupos desde iNaturalist / taxonomía
+    expect(
+      inferOrganismGroupFromMeta({ iconicTaxonName: 'Insecta', scientificName: 'Danaus erippus' })
+    ).toBe('mariposas');
+    expect(
+      inferOrganismGroupFromMeta({ iconicTaxonName: 'Insecta', scientificName: 'Bombus pauloensis' })
+    ).toBe('abejas_abejorros');
+    expect(
+      inferOrganismGroupFromMeta({ iconicTaxonName: 'Arachnida', scientificName: 'Argiope argentata' })
+    ).toBe('insectos_aracnidos');
+    expect(
+      inferServerOrganismGroup({ iconicTaxonName: 'Amphibia', scientificName: 'Rhinella arenarum' })
+    ).toBe('fauna_vecina');
+
+    // Prompts naturalistas adaptados a mariposas y polinizadores
+    const butterflyPrompt = buildNaturalistIllustrationPrompt({
+      commonNameAr: 'Mariposa monarca del sur',
+      scientificName: 'Danaus erippus',
+      identificationTraits: 'Alas anaranjadas con venas negras y puntitos blancos',
+      style: 'acuarela_naturalista',
+      organismGroup: 'mariposas',
+    });
+    expect(butterflyPrompt).toContain('lepidopterological');
+    expect(butterflyPrompt).toContain('Danaus erippus');
+    expect(butterflyPrompt).toContain('#FAF6E9');
+
+    const beePrompt = buildNaturalistIllustrationPrompt({
+      commonNameAr: 'Abejorro negro y amarillo',
+      scientificName: 'Bombus pauloensis',
+      identificationTraits: 'Cuerpo peludo negro y amarillo',
+      style: 'acuarela_naturalista',
+      organismGroup: 'abejas_abejorros',
+    });
+    expect(beePrompt).toContain('entomological');
+    expect(beePrompt).toContain('pollinator');
   });
 });

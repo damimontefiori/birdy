@@ -1,10 +1,11 @@
-import { SpeciesCatalogEntry } from '../types/domain';
+import { OrganismGroup, SpeciesCatalogEntry } from '../types/domain';
+import { BIOMA_FAUNA_EXTRAS } from './biomaFaunaExtras';
 
 /**
  * Catálogo taxonómico de aves frecuentes de Argentina (referencia eBird es_AR).
- * Textos breves, verídicos y adaptados al español rioplatense para lectura cómoda en celular.
+ * Se combina con mariposas, abejas, abejorros, insectos, arácnidos y fauna vecina en BIOMA_ARGENTINA_CATALOG.
  */
-export const ARGENTINA_BIRDS_CATALOG: SpeciesCatalogEntry[] = [
+const RAW_ARGENTINA_BIRDS_CATALOG: SpeciesCatalogEntry[] = [
   {
     taxonId: 'houwre',
     scientificName: 'Troglodytes aedon',
@@ -574,6 +575,43 @@ export const ARGENTINA_BIRDS_CATALOG: SpeciesCatalogEntry[] = [
   },
 ];
 
+function inferDefaultBirdEcologicalRole(bird: SpeciesCatalogEntry): string {
+  const diet = normalizeText(bird.dietTag || bird.dietAndHabitat || '');
+  if (diet.includes('nectar')) {
+    return 'Polinizador clave de flores tubulares e insectívoro delicado';
+  }
+  if (diet.includes('frut') && diet.includes('insect')) {
+    return 'Dispersor de semillas y controlador natural de insectos del jardín';
+  }
+  if (diet.includes('semill')) {
+    return 'Ave granívora e insectívora que enriquece la vida del jardín';
+  }
+  if (diet.includes('roedor')) {
+    return 'Ave rapaz beneficiosa que regula roedores e insectos grandes';
+  }
+  return 'Controlador natural de insectos y visitante vivo del jardín';
+}
+
+export const ARGENTINA_BIRDS_CATALOG: SpeciesCatalogEntry[] = RAW_ARGENTINA_BIRDS_CATALOG.map(
+  (bird) => ({
+    ...bird,
+    organismGroup: 'aves' as OrganismGroup,
+    ecologicalRole: bird.ecologicalRole || inferDefaultBirdEcologicalRole(bird),
+    coexistenceNote:
+      bird.coexistenceNote ||
+      'Inofensiva; ofrecer un bebedero con agua limpia, sombra y plantas nativas la invita a regresar.',
+  })
+);
+
+/**
+ * Catálogo completo de Bioma Argentina: aves, mariposas, abejas, abejorros,
+ * insectos, arácnidos y fauna vecina que convive en jardines y áreas naturales.
+ */
+export const BIOMA_ARGENTINA_CATALOG: SpeciesCatalogEntry[] = [
+  ...ARGENTINA_BIRDS_CATALOG,
+  ...BIOMA_FAUNA_EXTRAS,
+];
+
 // Registro dinámico en memoria para especies descubiertas por IA o iNaturalist fuera del catálogo base
 const dynamicSpeciesRegistry = new Map<string, SpeciesCatalogEntry>();
 
@@ -585,6 +623,97 @@ function normalizeText(value: string): string {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
+const VALID_ORGANISM_GROUPS = new Set<OrganismGroup>([
+  'aves',
+  'mariposas',
+  'abejas_abejorros',
+  'insectos_aracnidos',
+  'fauna_vecina',
+]);
+
+/**
+ * Clasifica cualquier especie en uno de los 5 grupos de Bioma a partir de su taxonomía,
+ * nombre común o nombre científico (compatible con iNaturalist y especies previas de aves).
+ */
+export function inferOrganismGroupFromMeta(meta: {
+  organismGroup?: string | null;
+  iconicTaxonName?: string | null;
+  scientificName?: string | null;
+  commonName?: string | null;
+  family?: string | null;
+}): OrganismGroup {
+  if (meta.organismGroup && VALID_ORGANISM_GROUPS.has(meta.organismGroup as OrganismGroup)) {
+    return meta.organismGroup as OrganismGroup;
+  }
+
+  const iconic = normalizeText(meta.iconicTaxonName || '');
+  const combined = normalizeText(
+    `${meta.commonName || ''} ${meta.scientificName || ''} ${meta.family || ''}`
+  );
+
+  if (iconic === 'aves') return 'aves';
+  if (iconic === 'arachnida') return 'insectos_aracnidos';
+  if (
+    iconic === 'reptilia' ||
+    iconic === 'amphibia' ||
+    iconic === 'mammalia' ||
+    iconic === 'mollusca' ||
+    iconic === 'actinopterygii'
+  ) {
+    return 'fauna_vecina';
+  }
+
+  // Palabras clave taxonómicas y vernáculas de alta precisión (singular y plural)
+  if (
+    /\b(mariposas?|polillas?|orugas?|esfinges?|lepidoptera|nymphalidae|pieridae|papilionidae|hesperiidae|lycaenidae|sphingidae|saturniidae|danaus|agraulis|morpho|vanessa|junonia|eurema|ascia|aellopos|heliconius|papilio|phoebis|pieris|colias|dryas)\b/.test(
+      combined
+    )
+  ) {
+    return 'mariposas';
+  }
+
+  if (
+    /\b(abejas?|abejitas?|abejorros?|mangangas?|yatei|melipon\w*|apidae|megachilidae|halictidae|andrenidae|colletidae|anthophila|apis|bombus|xylocopa|tetragonisca|megachile|augochlora|centris|euglossa)\b/.test(
+      combined
+    )
+  ) {
+    return 'abejas_abejorros';
+  }
+
+  if (
+    iconic === 'insecta' ||
+    /\b(insectos?|aranas?|aranitas?|aracnid\w*|vaquitas?|mariquitas?|mantis|mamboretas?|libelulas?|alguaciles?|escarabajos?|cascarudos?|toritos?|hormigas?|avispas?|grillos?|langostas?|saltamontes|chicharras?|cigarras?|bichos?|moscas?|mosquitos?|chinches?|bichitos?|coleoptera|hemiptera|odonata|orthoptera|hymenoptera|diptera|mantodea|araneae|salticidae|araneidae|coccinellidae|formicidae|scarabaeidae|cicadidae|armadillidi\w*)\b/.test(
+      combined
+    )
+  ) {
+    return 'insectos_aracnidos';
+  }
+
+  if (
+    /\b(lagartijas?|lagartos?|gekos?|geckos?|salamanquesas?|sapos?|ranas?|ranitas?|escuerzos?|comadrejas?|zarigueyas?|cuises?|cuis|murcielagos?|zorros?|liebres?|caracoles?|caracol|babosas?|tortugas?|culebras?|serpientes?|ratones?|ardillas?|teius|salvator|hemidactylus|rhinella|boana|didelphis|cornu|cavia)\b/.test(
+      combined
+    )
+  ) {
+    return 'fauna_vecina';
+  }
+
+  return 'aves';
+}
+
+export function getSpeciesGroup(
+  species?: Partial<SpeciesCatalogEntry> | null
+): OrganismGroup {
+  if (!species) return 'aves';
+  if (species.organismGroup && VALID_ORGANISM_GROUPS.has(species.organismGroup)) {
+    return species.organismGroup;
+  }
+  return inferOrganismGroupFromMeta({
+    scientificName: species.scientificName,
+    commonName: species.commonNameAr,
+    family: species.family,
+  });
+}
+
 export function buildStableTaxonIdFromScientificName(scientificName: string): string {
   const clean = normalizeText(scientificName).replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
   return clean ? `sp_${clean}` : `sp_${Date.now()}`;
@@ -592,8 +721,8 @@ export function buildStableTaxonIdFromScientificName(scientificName: string): st
 
 export function registerCustomSpecies(entry: SpeciesCatalogEntry): SpeciesCatalogEntry {
   const existingStatic =
-    ARGENTINA_BIRDS_CATALOG.find((s) => s.taxonId === entry.taxonId) ||
-    ARGENTINA_BIRDS_CATALOG.find(
+    BIOMA_ARGENTINA_CATALOG.find((s) => s.taxonId === entry.taxonId) ||
+    BIOMA_ARGENTINA_CATALOG.find(
       (s) => normalizeText(s.scientificName) === normalizeText(entry.scientificName)
     );
   if (existingStatic) {
@@ -607,17 +736,24 @@ export function registerCustomSpecies(entry: SpeciesCatalogEntry): SpeciesCatalo
     return existingStatic;
   }
 
+  const normalizedGroup = getSpeciesGroup(entry);
   const prev = dynamicSpeciesRegistry.get(entry.taxonId);
   const merged: SpeciesCatalogEntry = prev
     ? {
         ...prev,
         ...entry,
+        organismGroup: entry.organismGroup || prev.organismGroup || normalizedGroup,
+        ecologicalRole: entry.ecologicalRole || prev.ecologicalRole,
+        coexistenceNote: entry.coexistenceNote || prev.coexistenceNote,
         referencePhotos: entry.referencePhotos?.length ? entry.referencePhotos : prev.referencePhotos,
         alternativeNames: Array.from(
           new Set([...(prev.alternativeNames || []), ...(entry.alternativeNames || [])])
         ),
       }
-    : entry;
+    : {
+        ...entry,
+        organismGroup: normalizedGroup,
+      };
 
   dynamicSpeciesRegistry.set(merged.taxonId, merged);
   return merged;
@@ -637,7 +773,7 @@ export function getCustomSpeciesList(): SpeciesCatalogEntry[] {
 }
 
 export function getAllKnownSpecies(): SpeciesCatalogEntry[] {
-  return [...ARGENTINA_BIRDS_CATALOG, ...Array.from(dynamicSpeciesRegistry.values())];
+  return [...BIOMA_ARGENTINA_CATALOG, ...Array.from(dynamicSpeciesRegistry.values())];
 }
 
 export function findSpeciesByTaxonId(
@@ -645,7 +781,7 @@ export function findSpeciesByTaxonId(
 ): SpeciesCatalogEntry | undefined {
   if (!taxonId) return undefined;
   return (
-    ARGENTINA_BIRDS_CATALOG.find((s) => s.taxonId === taxonId) ||
+    BIOMA_ARGENTINA_CATALOG.find((s) => s.taxonId === taxonId) ||
     dynamicSpeciesRegistry.get(taxonId)
   );
 }
@@ -658,8 +794,13 @@ export function findSpeciesByScientificName(
   return getAllKnownSpecies().find((s) => normalizeText(s.scientificName) === target);
 }
 
-export function searchSpeciesCatalog(query: string): SpeciesCatalogEntry[] {
-  const all = getAllKnownSpecies();
+export function searchSpeciesCatalog(
+  query: string,
+  groupFilter: OrganismGroup | 'todos' = 'todos'
+): SpeciesCatalogEntry[] {
+  const all = getAllKnownSpecies().filter(
+    (s) => groupFilter === 'todos' || getSpeciesGroup(s) === groupFilter
+  );
   const q = normalizeText(query);
   if (!q) return all;
   return all.filter(
@@ -667,6 +808,7 @@ export function searchSpeciesCatalog(query: string): SpeciesCatalogEntry[] {
       normalizeText(s.commonNameAr).includes(q) ||
       normalizeText(s.scientificName).includes(q) ||
       s.alternativeNames.some((alt) => normalizeText(alt).includes(q)) ||
-      normalizeText(s.family).includes(q)
+      normalizeText(s.family).includes(q) ||
+      normalizeText(s.ecologicalRole || '').includes(q)
   );
 }

@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Birdy — Cuaderno de Aves",
-  "short_name": "Birdy",
-  "description": "Álbum naturalista personal para descubrir, identificar e ilustrar las aves de tu jardín y tus viajes.",
+  "name": "Bioma — Cuaderno vivo de jardín y naturaleza",
+  "short_name": "Bioma",
+  "description": "Cuaderno vivo ilustrado para descubrir, identificar y cuidar mariposas, aves, abejas, abejorros, insectos y la fauna que convive en tu jardín.",
   "lang": "es-AR",
   "start_url": "/",
   "scope": "/",
@@ -34,9 +34,9 @@
   ],
   "shortcuts": [
     {
-      "name": "Registrar ave",
+      "name": "Registrar hallazgo",
       "short_name": "Registrar",
-      "description": "Subir o sacar una foto para identificar un ave",
+      "description": "Subir o sacar una foto para identificar un ser vivo del jardín",
       "url": "/?action=add",
       "icons": [
         {

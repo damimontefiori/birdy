@@ -1,4 +1,8 @@
-import { IllustrationStyle } from '../types/domain';
+import {
+  IllustrationStyle,
+  ORGANISM_GROUP_META,
+  OrganismGroup,
+} from '../types/domain';
 import { getProxiedImageUrl } from './speciesReferenceService';
 import { formatShortArgentineDate } from './storageAndSyncService';
 
@@ -9,6 +13,7 @@ export interface SocialCardOptions {
   variant: SocialShareVariant;
   format: SocialShareFormat;
   style: IllustrationStyle;
+  organismGroup?: OrganismGroup;
   commonNameAr: string;
   scientificName: string;
   family: string;
@@ -16,6 +21,7 @@ export interface SocialCardOptions {
   sizeLabel?: string;
   habitatTag?: string;
   dietTag?: string;
+  ecologicalRole?: string;
   includeSpeciesInfo?: boolean;
   illustrationUrl: string;
   originalPhotoSanitizedUrl?: string;
@@ -115,13 +121,15 @@ export async function composeSocialShareCard(
   drawBotanicalOuterFrame(ctx, width, height, borderSoft, accentColor);
 
   // Cabezal superior
+  const groupMeta = options.organismGroup ? ORGANISM_GROUP_META[options.organismGroup] : null;
   ctx.fillStyle = accentColor;
   ctx.font = '700 22px "Plus Jakarta Sans", sans-serif';
   ctx.textAlign = 'center';
+  const groupHeaderLabel = groupMeta ? groupMeta.label.toUpperCase() : 'CUADERNO VIVO';
   ctx.fillText(
     isWatercolor
-      ? '✦   CUADERNO DE CAMPO · ACUARELA NATURALISTA   ✦'
-      : '✦   CUADERNO DE CAMPO · APUNTE EN LÁPIZ GRAFITO   ✦',
+      ? `✦   BIOMA · ${groupHeaderLabel} · ACUARELA NATURALISTA   ✦`
+      : `✦   BIOMA · ${groupHeaderLabel} · APUNTE EN LÁPIZ GRAFITO   ✦`,
     width / 2,
     isStory ? 96 : 82
   );
@@ -143,9 +151,12 @@ export async function composeSocialShareCard(
       ? formatShortArgentineDate(options.observedAtIso)
       : '';
   const showSpeciesInfo = options.includeSpeciesInfo !== false;
-  const pills = [options.sizeLabel, options.habitatTag, options.dietTag].filter(
-    (v): v is string => Boolean(v && v.trim())
-  );
+  const pills = [
+    options.ecologicalRole,
+    options.sizeLabel,
+    options.habitatTag,
+    options.dietTag,
+  ].filter((v): v is string => Boolean(v && v.trim()));
   const noteText =
     options.includePersonalNote && options.personalNote?.trim()
       ? `«${options.personalNote.trim().slice(0, 130)}»`

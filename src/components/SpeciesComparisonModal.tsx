@@ -1,8 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Check, ExternalLink, Loader2, X, ZoomIn } from 'lucide-react';
-import { findSpeciesByTaxonId } from '../data/argentinaBirdsCatalog';
+import { findSpeciesByTaxonId, getSpeciesGroup } from '../data/argentinaBirdsCatalog';
 import { fetchReferencePhotosForSpecies } from '../services/speciesReferenceService';
-import { AICandidate, SpeciesCatalogEntry, SpeciesReferencePhoto } from '../types/domain';
+import {
+  AICandidate,
+  ORGANISM_GROUP_META,
+  SpeciesCatalogEntry,
+  SpeciesReferencePhoto,
+} from '../types/domain';
 import { LightboxItem } from './ImageLightbox';
 
 interface SpeciesComparisonModalProps {
@@ -66,13 +71,16 @@ export const SpeciesComparisonModal: React.FC<SpeciesComparisonModalProps> = ({
 
   const altNames =
     (catalogMatch.alternativeNames?.length ? catalogMatch.alternativeNames : candidate?.alternativeNames) || [];
+  const groupMeta = ORGANISM_GROUP_META[getSpeciesGroup(catalogMatch)];
+  const ecologicalRole = catalogMatch.ecologicalRole || candidate?.ecologicalRole;
+  const coexistenceNote = catalogMatch.coexistenceNote || candidate?.coexistenceNote;
 
   const openBothInLightbox = (startOnRef: boolean) => {
     const items: LightboxItem[] = [
       {
         url: userPhotoUrl,
         title: 'Tu fotografía original',
-        subtitle: 'Acercá para observar pico, ojos, patas y patrón de plumas',
+        subtitle: 'Acercá para observar alas, colores, rasgos y silueta',
         badge: 'Tu foto',
       },
     ];
@@ -112,7 +120,16 @@ export const SpeciesComparisonModal: React.FC<SpeciesComparisonModalProps> = ({
         <div className="modal-sheet-header">
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span className="badge badge-sync-respaldado">Comparación visual</span>
+              <span
+                className="group-pill"
+                style={{
+                  background: groupMeta.accentBg,
+                  color: groupMeta.accentText,
+                  borderColor: groupMeta.accentBorder,
+                }}
+              >
+                {groupMeta.emoji} {groupMeta.label}
+              </span>
               {candidate?.confidenceBand && (
                 <span className="badge badge-subtle">{candidate.confidenceBand}</span>
               )}
@@ -229,6 +246,13 @@ export const SpeciesComparisonModal: React.FC<SpeciesComparisonModalProps> = ({
                   </span>
                 ))}
               </div>
+            </div>
+          )}
+
+          {ecologicalRole && (
+            <div className="eco-role-inline">
+              <strong>Rol en el jardín:</strong> {ecologicalRole}
+              {coexistenceNote ? ` · ${coexistenceNote}` : ''}
             </div>
           )}
 

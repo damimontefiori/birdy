@@ -14,10 +14,10 @@ import {
   Download,
   Edit3,
   Eye,
-  Feather,
   FolderOpen,
   Globe,
   HelpCircle,
+  Leaf,
   Loader2,
   LogOut,
   MapPin,
@@ -29,6 +29,7 @@ import {
   ShieldCheck,
   Smartphone,
   Sparkles,
+  Sprout,
   Trash2,
   Upload,
   UploadCloud,
@@ -49,6 +50,7 @@ import {
   findSpeciesByTaxonId,
   getAllKnownSpecies,
   getCustomSpeciesList,
+  getSpeciesGroup,
   searchSpeciesCatalog,
 } from './data/argentinaBirdsCatalog';
 import {
@@ -98,6 +100,9 @@ import {
   Notebook,
   NotebookSpeciesSheet,
   NotebookType,
+  ORGANISM_GROUP_META,
+  ORGANISM_GROUPS_ORDER,
+  OrganismGroup,
   Sighting,
   SpeciesCatalogEntry,
   SpeciesReferencePhoto,
@@ -168,8 +173,8 @@ export const App: React.FC = () => {
     const email = params.get('auth_email');
     if (err === 'not_authorized') {
       return email
-        ? `Acceso restringido: la cuenta ${email} no está autorizada para acceder a Birdy.`
-        : 'Acceso restringido: esta cuenta de Google no está autorizada para acceder a Birdy.';
+        ? `Acceso restringido: la cuenta ${email} no está autorizada para acceder a Bioma.`
+        : 'Acceso restringido: esta cuenta de Google no está autorizada para acceder a Bioma.';
     }
     if (err === 'csrf_failed' || err === 'invalid_token') {
       return 'No pudimos verificar tu inicio de sesión con Google. Intentá nuevamente.';
@@ -188,6 +193,7 @@ export const App: React.FC = () => {
   );
   const [activeSheetId, setActiveSheetId] = useState<string | null>(null);
   const [notebookSearchQuery, setNotebookSearchQuery] = useState<string>('');
+  const [notebookGroupFilter, setNotebookGroupFilter] = useState<OrganismGroup | 'todos'>('todos');
 
   // Vista de lámina: modo visual protagonista + ficha de campo desplegable
   const [sheetVisualMode, setSheetVisualMode] = useState<SheetVisualMode>('ambas');
@@ -215,13 +221,13 @@ export const App: React.FC = () => {
   } | null>(null);
 
   // Formulario de creación/edición de cuaderno
-  const [nbTitle, setNbTitle] = useState<string>('Aves de mi jardín');
+  const [nbTitle, setNbTitle] = useState<string>('Vida de mi jardín');
   const [nbType, setNbType] = useState<NotebookType>('jardin');
   const [nbStyle, setNbStyle] = useState<IllustrationStyle>('acuarela_naturalista');
   const [nbLocation, setNbLocation] = useState<string>('Tigre, Buenos Aires');
   const [nbPeriod, setNbPeriod] = useState<string>('Primavera 2026');
   const [nbDescription, setNbDescription] = useState<string>(
-    'Mis observaciones cotidianas entre los árboles y flores del jardín.'
+    'Mariposas, aves, abejas, insectos y pequeños vecinos que visitan el jardín.'
   );
   const [editingNotebookMeta, setEditingNotebookMeta] = useState<boolean>(false);
 
@@ -248,6 +254,7 @@ export const App: React.FC = () => {
   const [idResponse, setIdResponse] = useState<IdentificationResponse | null>(null);
   const [selectedTaxonId, setSelectedTaxonId] = useState<string | null>(null);
   const [manualSearchQuery, setManualSearchQuery] = useState<string>('');
+  const [manualGroupFilter, setManualGroupFilter] = useState<OrganismGroup | 'todos'>('todos');
   const [liveInatResults, setLiveInatResults] = useState<SpeciesCatalogEntry[]>([]);
   const [isSearchingLiveInat, setIsSearchingLiveInat] = useState<boolean>(false);
   const [duplicateSpeciesPrompt, setDuplicateSpeciesPrompt] = useState<{
@@ -305,7 +312,7 @@ export const App: React.FC = () => {
     const handleInstalled = () => {
       setInstallPromptEvent(null);
       setIsStandaloneApp(true);
-      showToast('¡Birdy quedó instalada en tu pantalla de inicio!');
+      showToast('¡Bioma quedó instalada en tu pantalla de inicio!');
     };
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
     window.addEventListener('appinstalled', handleInstalled);
@@ -470,7 +477,7 @@ export const App: React.FC = () => {
         case 'welcome':
         default:
           ensureBaseGuard();
-          showToast('Ya estás en el inicio de Birdy.');
+          showToast('Ya estás en el inicio de Bioma.');
       }
     };
 
@@ -506,7 +513,7 @@ export const App: React.FC = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `birdy-respaldo-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `bioma-respaldo-${new Date().toISOString().slice(0, 10)}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -530,7 +537,7 @@ export const App: React.FC = () => {
         `Respaldo importado: ${restored.notebooks.length} cuaderno(s) y ${restored.sightings.length} avistamiento(s).`
       );
     } catch {
-      showToast('El archivo seleccionado no es un respaldo válido de Birdy.');
+      showToast('El archivo seleccionado no es un respaldo válido de Bioma.');
     } finally {
       e.target.value = '';
     }
@@ -598,12 +605,12 @@ export const App: React.FC = () => {
       user: profile,
     }));
     if (persisted.notebooks.length === 0) {
-      setNbTitle('Aves de mi jardín');
+      setNbTitle('Vida de mi jardín');
       setNbType('jardin');
       setNbStyle('acuarela_naturalista');
       setNbLocation('Tigre, Buenos Aires');
       setNbPeriod('Primavera 2026');
-      setNbDescription('Las aves que visitan el jardín de casa y la galería.');
+      setNbDescription('Mariposas, aves, abejas, insectos y pequeños vecinos que visitan el jardín.');
       setScreen('onboarding_first_notebook');
     } else {
       setActiveNotebookId(persisted.notebooks[0].id);
@@ -663,23 +670,43 @@ export const App: React.FC = () => {
     [persisted.sheets, activeNotebookId]
   );
 
+  const notebookGroupCounts = useMemo(() => {
+    const counts: Record<OrganismGroup, number> = {
+      aves: 0,
+      mariposas: 0,
+      abejas_abejorros: 0,
+      insectos_aracnidos: 0,
+      fauna_vecina: 0,
+    };
+    for (const sh of activeNotebookSheets) {
+      const sp = findSpeciesByTaxonId(sh.taxonId);
+      const group = getSpeciesGroup(sp);
+      counts[group] += 1;
+    }
+    return counts;
+  }, [activeNotebookSheets]);
+
   const filteredNotebookSheets = useMemo(() => {
     const q = notebookSearchQuery
       .trim()
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '');
-    if (!q) return activeNotebookSheets;
+
     return activeNotebookSheets.filter((sh) => {
       const sp = findSpeciesByTaxonId(sh.taxonId);
       if (!sp) return false;
-      const haystack = `${sp.commonNameAr} ${sp.scientificName} ${sp.alternativeNames.join(' ')}`
+      if (notebookGroupFilter !== 'todos' && getSpeciesGroup(sp) !== notebookGroupFilter) {
+        return false;
+      }
+      if (!q) return true;
+      const haystack = `${sp.commonNameAr} ${sp.scientificName} ${sp.alternativeNames.join(' ')} ${sp.family} ${sp.ecologicalRole || ''}`
         .toLowerCase()
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '');
       return haystack.includes(q);
     });
-  }, [activeNotebookSheets, notebookSearchQuery]);
+  }, [activeNotebookSheets, notebookSearchQuery, notebookGroupFilter]);
 
   const activeSheet = useMemo(
     () => persisted.sheets.find((s) => s.id === activeSheetId) || null,
@@ -725,6 +752,7 @@ export const App: React.FC = () => {
     pushHistoryLayer('notebook_detail');
     setActiveNotebookId(nbId);
     setNotebookSearchQuery('');
+    setNotebookGroupFilter('todos');
     setScreen('notebook_detail');
   };
 
@@ -784,12 +812,12 @@ export const App: React.FC = () => {
     setPersisted(nextState);
 
     if (nextState.notebooks.length === 0) {
-      setNbTitle('Aves de mi jardín');
+      setNbTitle('Vida de mi jardín');
       setNbType('jardin');
       setNbStyle('acuarela_naturalista');
       setNbLocation('Tigre, Buenos Aires');
       setNbPeriod('Primavera 2026');
-      setNbDescription('Las aves que visitan el jardín de casa y la galería.');
+      setNbDescription('Mariposas, aves, abejas, insectos y pequeños vecinos que visitan el jardín.');
       setScreen('onboarding_first_notebook');
     } else {
       setActiveNotebookId(nextState.notebooks[0].id);
@@ -800,7 +828,7 @@ export const App: React.FC = () => {
   const handleCreateNotebook = (e: React.FormEvent) => {
     e.preventDefault();
     if (!persisted.user) return;
-    const cleanTitle = nbTitle.trim() || 'Aves de mi jardín';
+    const cleanTitle = nbTitle.trim() || 'Vida de mi jardín';
     const now = new Date().toISOString();
 
     const newNotebook: Notebook = {
@@ -834,6 +862,7 @@ export const App: React.FC = () => {
     pushHistoryLayer('notebook_detail');
     setActiveNotebookId(newNotebook.id);
     setNotebookSearchQuery('');
+    setNotebookGroupFilter('todos');
     setScreen('notebook_detail');
     showToast(
       `Cuaderno «${newNotebook.title}» creado (${
@@ -873,6 +902,7 @@ export const App: React.FC = () => {
     setDraftPersonalNote('');
     setDuplicateSpeciesPrompt(null);
     setManualSearchQuery('');
+    setManualGroupFilter('todos');
     setLiveInatResults([]);
     pushHistoryLayer('add_sighting');
     setScreen('add_sighting');
@@ -1019,6 +1049,7 @@ export const App: React.FC = () => {
     setSelectedTaxonId(null);
     setDuplicateSpeciesPrompt(null);
     setManualSearchQuery('');
+    setManualGroupFilter('todos');
     setLiveInatResults([]);
     pushHistoryLayer('identify_review');
     setScreen('identify_review');
@@ -1696,21 +1727,40 @@ export const App: React.FC = () => {
           }}
         >
           <span className="badge badge-sync-respaldado" style={{ marginBottom: 10 }}>
-            <Feather size={13} /> Álbum personal de naturaleza
+            <Sprout size={13} /> Cuaderno vivo de jardín y naturaleza
           </span>
-          <h1 className="serif-heading" style={{ fontSize: '2.35rem', marginBottom: 4 }}>
-            Cuaderno de Aves
+          <h1 className="serif-heading" style={{ fontSize: '2.55rem', marginBottom: 4 }}>
+            Bioma
           </h1>
-          <p className="handwritten-note" style={{ margin: '0 0 18px', color: 'var(--botanical-green)' }}>
-            Un refugio ilustrado para las aves de tu jardín y tus viajes
+          <p className="handwritten-note" style={{ margin: '0 0 14px', color: 'var(--botanical-green)' }}>
+            Un refugio ilustrado para las mariposas, aves, abejas, insectos y la vida de tu jardín
           </p>
+
+          <div className="welcome-groups-row" aria-label="Grupos de vida que podés registrar">
+            {ORGANISM_GROUPS_ORDER.map((g) => {
+              const meta = ORGANISM_GROUP_META[g];
+              return (
+                <span
+                  key={g}
+                  className="group-pill"
+                  style={{
+                    background: meta.accentBg,
+                    color: meta.accentText,
+                    borderColor: meta.accentBorder,
+                  }}
+                >
+                  {meta.emoji} {meta.shortLabel}
+                </span>
+              );
+            })}
+          </div>
 
           <div
             style={{
               display: 'grid',
               gridTemplateColumns: '1fr 1fr',
               gap: 10,
-              margin: '16px 0 18px',
+              margin: '14px 0 18px',
             }}
           >
             <div className="plate-frame">
@@ -1722,9 +1772,9 @@ export const App: React.FC = () => {
           </div>
 
           <p style={{ color: 'var(--ink-secondary)', fontSize: '0.94rem', marginBottom: 18 }}>
-            Descubrí qué especie fotografiaste, comparala con fotos reales sin salir de la app y
-            transformá cada hallazgo en una lámina en <strong>acuarela</strong> o{' '}
-            <strong>lápiz grafito</strong>.
+            Descubrí qué ave, mariposa, abeja, abejorro, insecto o vecino del jardín fotografiaste,
+            conocé su rol ecológico y convertí cada encuentro en una lámina en{' '}
+            <strong>acuarela</strong> o <strong>lápiz grafito</strong>.
           </p>
 
           {authErrorMessage && (
@@ -1789,11 +1839,13 @@ export const App: React.FC = () => {
     screen === 'library' || screen === 'notebook_detail' || screen === 'pending_center';
 
   // Resultados combinados para búsqueda manual visual en identify_review
-  const localManualResults = searchSpeciesCatalog(manualSearchQuery);
+  const localManualResults = searchSpeciesCatalog(manualSearchQuery, manualGroupFilter);
   const combinedManualResults: SpeciesCatalogEntry[] = [
     ...localManualResults,
     ...liveInatResults.filter(
-      (live) => !localManualResults.some((loc) => loc.taxonId === live.taxonId)
+      (live) =>
+        !localManualResults.some((loc) => loc.taxonId === live.taxonId) &&
+        (manualGroupFilter === 'todos' || getSpeciesGroup(live) === manualGroupFilter)
     ),
   ];
 
@@ -1807,10 +1859,10 @@ export const App: React.FC = () => {
           onClick={() => setScreen('library')}
           title="Ir a mis cuadernos"
         >
-          <Feather size={23} color="#38573E" />
+          <Sprout size={23} color="#38573E" />
           <div style={{ minWidth: 0 }}>
-            <h1>Cuaderno de Aves</h1>
-            <span className="brand-subtitle">Colección de {persisted.user.displayName}</span>
+            <h1>Bioma</h1>
+            <span className="brand-subtitle">Cuaderno vivo de {persisted.user.displayName}</span>
           </div>
         </button>
 
@@ -1820,7 +1872,7 @@ export const App: React.FC = () => {
               type="button"
               className="btn btn-primary btn-compact"
               onClick={() => void handleTriggerPwaInstall()}
-              title="Instalar Birdy como aplicación en tu pantalla de inicio"
+              title="Instalar Bioma como aplicación en tu pantalla de inicio"
             >
               <Download size={14} /> Instalar
             </button>
@@ -1908,7 +1960,7 @@ export const App: React.FC = () => {
                 className="input-text"
                 value={nbTitle}
                 onChange={(e) => setNbTitle(e.target.value)}
-                placeholder="Ej.: Aves de mi jardín o Vacaciones en Lago Puelo"
+                placeholder="Ej.: Vida de mi jardín o Vacaciones en Lago Puelo"
               />
             </div>
 
@@ -1920,17 +1972,17 @@ export const App: React.FC = () => {
                   className={`segmented-btn ${nbType === 'jardin' ? 'active' : ''}`}
                   onClick={() => {
                     setNbType('jardin');
-                    if (nbTitle === 'Vacaciones en Lago Puelo') setNbTitle('Aves de mi jardín');
+                    if (nbTitle === 'Vacaciones en Lago Puelo') setNbTitle('Vida de mi jardín');
                   }}
                 >
-                  <Feather size={15} /> Hogar / Jardín
+                  <Sprout size={15} /> Hogar / Jardín
                 </button>
                 <button
                   type="button"
                   className={`segmented-btn ${nbType === 'viaje' ? 'active' : ''}`}
                   onClick={() => {
                     setNbType('viaje');
-                    if (nbTitle === 'Aves de mi jardín') {
+                    if (nbTitle === 'Vida de mi jardín' || nbTitle === 'Aves de mi jardín') {
                       setNbTitle('Vacaciones en Lago Puelo');
                       setNbLocation('Lago Puelo, Chubut');
                       setNbPeriod('Verano 2026');
@@ -2036,7 +2088,7 @@ export const App: React.FC = () => {
                 Mis cuadernos
               </h2>
               <span style={{ color: 'var(--ink-secondary)', fontSize: '0.88rem' }}>
-                Elegí un cuaderno para hojear tus aves o sumar un hallazgo.
+                Elegí un cuaderno para explorar la vida de tu bioma o sumar un hallazgo.
               </span>
             </div>
             <button
@@ -2048,7 +2100,7 @@ export const App: React.FC = () => {
                 setNbStyle('lapiz_grafito');
                 setNbLocation('Lago Puelo, Chubut');
                 setNbPeriod('Verano 2026');
-                setNbDescription('Aves observadas en los senderos y costas del lago.');
+                setNbDescription('Aves, mariposas, insectos y fauna descubierta en los senderos del lago.');
                 pushHistoryLayer('create_notebook');
                 setScreen('create_notebook');
               }}
@@ -2103,13 +2155,37 @@ export const App: React.FC = () => {
                     </div>
 
                     {nbSheets.length > 0 && (
-                      <div className="notebook-preview-strip" aria-hidden="true">
-                        {nbSheets.slice(0, 4).map((sh) => (
-                          <div key={sh.id} className="notebook-preview-mini">
-                            <img src={resolveSheetIllustrationUrl(sh, nb.style)} alt="" />
-                          </div>
-                        ))}
-                      </div>
+                      <>
+                        <div className="notebook-preview-strip" aria-hidden="true">
+                          {nbSheets.slice(0, 4).map((sh) => (
+                            <div key={sh.id} className="notebook-preview-mini">
+                              <img src={resolveSheetIllustrationUrl(sh, nb.style)} alt="" />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="notebook-biome-counts">
+                          {ORGANISM_GROUPS_ORDER.map((g) => {
+                            const cnt = nbSheets.filter(
+                              (sh) => getSpeciesGroup(findSpeciesByTaxonId(sh.taxonId)) === g
+                            ).length;
+                            if (cnt === 0) return null;
+                            const gm = ORGANISM_GROUP_META[g];
+                            return (
+                              <span
+                                key={g}
+                                className="biome-mini-count"
+                                style={{
+                                  background: gm.accentBg,
+                                  color: gm.accentText,
+                                }}
+                                title={`${cnt} ${gm.label.toLowerCase()}`}
+                              >
+                                {gm.emoji} {cnt}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </>
                     )}
                   </div>
 
@@ -2295,81 +2371,166 @@ export const App: React.FC = () => {
             )}
           </div>
 
-          {/* Estado vacío o grilla visual de láminas */}
+          {/* Estado vacío o grilla visual de láminas con filtros por grupo del bioma */}
           {activeNotebookSheets.length === 0 ? (
             <div className="notebook-page" style={{ textAlign: 'center', padding: '32px 18px' }}>
-              <Feather size={36} color="#38573E" style={{ marginBottom: 8 }} />
+              <Sprout size={36} color="#38573E" style={{ marginBottom: 8 }} />
               <h3 className="serif-heading" style={{ fontSize: '1.65rem' }}>
                 Las páginas de «{activeNotebook.title}» están listas
               </h3>
-              <p style={{ color: 'var(--ink-secondary)', maxWidth: 420, margin: '6px auto 18px', fontSize: '0.92rem' }}>
-                Elegí una foto de tu galería o sacá una ahora para identificar tu primera ave y
-                sumar su lámina ilustrada.
+              <p style={{ color: 'var(--ink-secondary)', maxWidth: 440, margin: '6px auto 18px', fontSize: '0.92rem' }}>
+                Elegí una foto de tu galería o sacá una ahora para identificar mariposas, aves,
+                abejas, abejorros, insectos o vecinos del jardín y sumar su lámina ilustrada.
               </p>
               <button
                 type="button"
                 className="btn btn-primary"
                 onClick={() => startAddSightingFlow(activeNotebook.id)}
               >
-                <Camera size={18} /> Registrar mi primera ave
+                <Camera size={18} /> Registrar mi primer hallazgo
               </button>
             </div>
           ) : (
             <div>
+              {/* Barra táctil de filtros por grupo biológico */}
+              <div
+                className="group-filter-bar"
+                role="tablist"
+                aria-label="Filtrar especies por grupo del bioma"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={notebookGroupFilter === 'todos'}
+                  className={`group-filter-chip ${notebookGroupFilter === 'todos' ? 'active' : ''}`}
+                  onClick={() => setNotebookGroupFilter('todos')}
+                >
+                  🌿 Todo ({activeNotebookSheets.length})
+                </button>
+                {ORGANISM_GROUPS_ORDER.map((group) => {
+                  const meta = ORGANISM_GROUP_META[group];
+                  const count = notebookGroupCounts[group];
+                  return (
+                    <button
+                      key={group}
+                      type="button"
+                      role="tab"
+                      aria-selected={notebookGroupFilter === group}
+                      className={`group-filter-chip ${notebookGroupFilter === group ? 'active' : ''} ${
+                        count === 0 ? 'empty' : ''
+                      }`}
+                      onClick={() => setNotebookGroupFilter(group)}
+                    >
+                      {meta.emoji} {meta.shortLabel}
+                      {count > 0 ? ` (${count})` : ''}
+                    </button>
+                  );
+                })}
+              </div>
+
               {activeNotebookSheets.length >= 3 && (
                 <div className="search-input-wrap" style={{ marginBottom: 12 }}>
                   <Search size={17} />
                   <input
                     type="search"
                     className="input-text"
-                    placeholder="Filtrar especies en este cuaderno…"
+                    placeholder="Buscar ave, mariposa, abeja, insecto o animal…"
                     value={notebookSearchQuery}
                     onChange={(e) => setNotebookSearchQuery(e.target.value)}
                   />
                 </div>
               )}
 
-              <div className="sheets-grid">
-                {filteredNotebookSheets.map((sheet) => {
-                  const species = findSpeciesByTaxonId(sheet.taxonId);
-                  if (!species) return null;
-                  const imgUrl = resolveSheetIllustrationUrl(sheet, activeNotebook.style);
-
-                  const sheetSightings = persisted.sightings.filter(
-                    (s) =>
-                      s.notebookId === activeNotebook.id &&
-                      s.taxonId === sheet.taxonId &&
-                      s.identificationStatus === 'identificado'
-                  );
-
-                  return (
-                    <div
-                      key={sheet.id}
-                      className="species-plate-card"
-                      onClick={() => openSheetDetail(sheet.id)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => e.key === 'Enter' && openSheetDetail(sheet.id)}
+              {filteredNotebookSheets.length === 0 ? (
+                <div className="notebook-page" style={{ textAlign: 'center', padding: '26px 18px' }}>
+                  <div style={{ fontSize: '1.8rem', marginBottom: 6 }}>
+                    {notebookGroupFilter === 'todos'
+                      ? '🔍'
+                      : ORGANISM_GROUP_META[notebookGroupFilter].emoji}
+                  </div>
+                  <h4 className="serif-heading" style={{ fontSize: '1.35rem', margin: '0 0 6px' }}>
+                    {notebookGroupFilter === 'todos'
+                      ? 'No encontramos especies con ese filtro'
+                      : `Todavía no sumaste ${ORGANISM_GROUP_META[notebookGroupFilter].label.toLowerCase()} aquí`}
+                  </h4>
+                  <p style={{ color: 'var(--ink-secondary)', fontSize: '0.86rem', margin: '0 0 14px' }}>
+                    {notebookGroupFilter === 'todos'
+                      ? 'Probá con otro nombre común o científico.'
+                      : 'Cuando fotografíes un visitante de este grupo, su lámina aparecerá en esta sección.'}
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-compact"
+                      onClick={() => startAddSightingFlow(activeNotebook.id)}
                     >
-                      <div className={`plate-frame style-${activeNotebook.style}`}>
-                        <img src={imgUrl} alt={`Lámina de ${species.commonNameAr}`} />
-                      </div>
-                      <div>
-                        <h4 className="serif-heading species-card-title">{species.commonNameAr}</h4>
-                        <div className="scientific-name species-card-sci">
-                          {species.scientificName}
-                        </div>
-                        <div className="species-card-foot">
-                          <span>{formatShortArgentineDate(sheet.firstObservedAt)}</span>
-                          <span className="badge badge-sync-respaldado" style={{ padding: '2px 7px' }}>
-                            {sheetSightings.length}×
+                      <Camera size={15} /> Registrar hallazgo
+                    </button>
+                    {notebookGroupFilter !== 'todos' && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-compact"
+                        onClick={() => setNotebookGroupFilter('todos')}
+                      >
+                        Ver todo el bioma
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="sheets-grid">
+                  {filteredNotebookSheets.map((sheet) => {
+                    const species = findSpeciesByTaxonId(sheet.taxonId);
+                    if (!species) return null;
+                    const imgUrl = resolveSheetIllustrationUrl(sheet, activeNotebook.style);
+                    const gMeta = ORGANISM_GROUP_META[getSpeciesGroup(species)];
+
+                    const sheetSightings = persisted.sightings.filter(
+                      (s) =>
+                        s.notebookId === activeNotebook.id &&
+                        s.taxonId === sheet.taxonId &&
+                        s.identificationStatus === 'identificado'
+                    );
+
+                    return (
+                      <div
+                        key={sheet.id}
+                        className="species-plate-card"
+                        onClick={() => openSheetDetail(sheet.id)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => e.key === 'Enter' && openSheetDetail(sheet.id)}
+                      >
+                        <div className={`plate-frame style-${activeNotebook.style}`}>
+                          <img src={imgUrl} alt={`Lámina de ${species.commonNameAr}`} />
+                          <span
+                            className="plate-group-corner-tag"
+                            style={{
+                              background: gMeta.accentBg,
+                              color: gMeta.accentText,
+                              borderColor: gMeta.accentBorder,
+                            }}
+                          >
+                            {gMeta.emoji} {gMeta.singularLabel}
                           </span>
                         </div>
+                        <div>
+                          <h4 className="serif-heading species-card-title">{species.commonNameAr}</h4>
+                          <div className="scientific-name species-card-sci">
+                            {species.scientificName}
+                          </div>
+                          <div className="species-card-foot">
+                            <span>{formatShortArgentineDate(sheet.firstObservedAt)}</span>
+                            <span className="badge badge-sync-respaldado" style={{ padding: '2px 7px' }}>
+                              {sheetSightings.length}×
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -2478,11 +2639,11 @@ export const App: React.FC = () => {
          ======================================================================== */}
       {screen === 'add_sighting' && activeNotebook && (
         <section className="notebook-page">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8 }}>
             <div>
               <span className="badge badge-sync-respaldado">{activeNotebook.title}</span>
               <h2 className="serif-heading" style={{ fontSize: '1.8rem', margin: '4px 0 0' }}>
-                Registrar ave
+                Registrar hallazgo
               </h2>
             </div>
             <button
@@ -2493,6 +2654,9 @@ export const App: React.FC = () => {
               <ArrowLeft size={15} /> Volver
             </button>
           </div>
+          <p style={{ margin: '0 0 14px', fontSize: '0.86rem', color: 'var(--ink-secondary)' }}>
+            Fotografiá un ave, mariposa, abeja, abejorro, insecto, araña o visitante del jardín.
+          </p>
 
           <input
             ref={galleryInputRef}
@@ -2630,7 +2794,7 @@ export const App: React.FC = () => {
                   className="input-textarea"
                   value={draftPersonalNote}
                   onChange={(e) => setDraftPersonalNote(e.target.value)}
-                  placeholder="Ej.: Cantaba entre las ramas del limonero…"
+                  placeholder="Ej.: Posada en la lavanda al sol de la mañana…"
                 />
               </div>
 
@@ -2642,7 +2806,7 @@ export const App: React.FC = () => {
               >
                 {isOnline ? (
                   <>
-                    <Sparkles size={18} /> Confirmar foto e identificar ave
+                    <Sparkles size={18} /> Confirmar foto e identificar especie
                   </>
                 ) : (
                   <>
@@ -2682,7 +2846,7 @@ export const App: React.FC = () => {
         <section className="notebook-page">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8 }}>
             <h2 className="serif-heading" style={{ fontSize: '1.75rem', margin: 0 }}>
-              Identificar ave
+              Identificar especie
             </h2>
             <button
               type="button"
@@ -2731,10 +2895,10 @@ export const App: React.FC = () => {
             <div className="callout-box" style={{ padding: 24, textAlign: 'center' }}>
               <Loader2 size={28} color="#38573E" className="spin" style={{ marginBottom: 8 }} />
               <div style={{ fontWeight: 700, fontSize: '1rem' }}>
-                Analizando pico, plumaje y proporciones…
+                Analizando alas, colores, rasgos y proporciones…
               </div>
               <div style={{ color: 'var(--ink-secondary)', fontSize: '0.86rem', marginTop: 4 }}>
-                Contrastando con avifauna de Argentina y buscando fotos reales de referencia.
+                Contrastando con la fauna y polinizadores de Argentina y buscando fotos reales de referencia.
               </div>
             </div>
           ) : (
@@ -2878,14 +3042,17 @@ export const App: React.FC = () => {
                       const isSelected = selectedTaxonId === cand.taxonId;
                       const speciesMatch = findSpeciesByTaxonId(cand.taxonId) || {
                         taxonId: cand.taxonId,
+                        organismGroup: cand.organismGroup,
                         commonNameAr: cand.commonNameAr,
                         scientificName: cand.scientificName,
                         alternativeNames: cand.alternativeNames || [],
-                        family: cand.family || 'Aves',
+                        family: cand.family || 'Fauna',
                         quickSummary: cand.quickSummary || cand.reasoning,
                         sizeLabel: cand.sizeLabel,
                         habitatTag: cand.habitatTag,
                         dietTag: cand.dietTag,
+                        ecologicalRole: cand.ecologicalRole,
+                        coexistenceNote: cand.coexistenceNote,
                         identificationTraits: cand.identificationTraits || cand.reasoning,
                         typicalBehavior: cand.typicalBehavior || '',
                         dietAndHabitat: cand.dietAndHabitat || '',
@@ -2894,6 +3061,7 @@ export const App: React.FC = () => {
                         referencePhotos: cand.referencePhotos,
                         wikipediaUrl: cand.wikipediaUrl,
                       };
+                      const candGroupMeta = ORGANISM_GROUP_META[getSpeciesGroup(speciesMatch)];
 
                       return (
                         <article
@@ -2913,6 +3081,17 @@ export const App: React.FC = () => {
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6 }}>
                                 <div>
+                                  <span
+                                    className="group-pill"
+                                    style={{
+                                      background: candGroupMeta.accentBg,
+                                      color: candGroupMeta.accentText,
+                                      borderColor: candGroupMeta.accentBorder,
+                                      marginBottom: 4,
+                                    }}
+                                  >
+                                    {candGroupMeta.emoji} {candGroupMeta.label}
+                                  </span>
                                   <strong style={{ fontSize: '1.02rem', display: 'block', lineHeight: 1.15 }}>
                                     {cand.commonNameAr}
                                   </strong>
@@ -2926,6 +3105,11 @@ export const App: React.FC = () => {
                               <p style={{ fontSize: '0.82rem', color: 'var(--ink-secondary)', margin: '5px 0 0', lineHeight: 1.38 }}>
                                 {cand.reasoning}
                               </p>
+                              {(cand.ecologicalRole || speciesMatch.ecologicalRole) && (
+                                <div style={{ fontSize: '0.76rem', color: 'var(--botanical-green-dark)', marginTop: 4, fontWeight: 600 }}>
+                                  🌿 {cand.ecologicalRole || speciesMatch.ecologicalRole}
+                                </div>
+                              )}
                             </div>
                           </div>
 
@@ -2951,13 +3135,36 @@ export const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Buscador visual de aves de Argentina + búsqueda en vivo en iNaturalist */}
+              {/* Buscador visual de fauna y polinizadores de Argentina + búsqueda en vivo en iNaturalist */}
               <div className="field-group" style={{ marginTop: 14 }}>
                 <label htmlFor="manual-species-search">
                   {idResponse.candidates.length > 0
-                    ? '¿No es ninguna de estas? Buscala y compará con fotos reales:'
-                    : 'Buscá el ave en la guía visual de Argentina (con fotos reales):'}
+                    ? '¿No es ninguna de estas? Buscala en Bioma y compará con fotos reales:'
+                    : 'Buscá la especie en la guía visual de Bioma (con fotos reales):'}
                 </label>
+
+                <div className="group-filter-bar compact" style={{ marginBottom: 8 }}>
+                  <button
+                    type="button"
+                    className={`group-filter-chip ${manualGroupFilter === 'todos' ? 'active' : ''}`}
+                    onClick={() => setManualGroupFilter('todos')}
+                  >
+                    🌿 Todo
+                  </button>
+                  {ORGANISM_GROUPS_ORDER.map((g) => {
+                    const meta = ORGANISM_GROUP_META[g];
+                    return (
+                      <button
+                        key={g}
+                        type="button"
+                        className={`group-filter-chip ${manualGroupFilter === g ? 'active' : ''}`}
+                        onClick={() => setManualGroupFilter(g)}
+                      >
+                        {meta.emoji} {meta.shortLabel}
+                      </button>
+                    );
+                  })}
+                </div>
 
                 <div className="search-input-wrap" style={{ marginBottom: 8 }}>
                   <Search size={17} />
@@ -2965,17 +3172,20 @@ export const App: React.FC = () => {
                     id="manual-species-search"
                     type="search"
                     className="input-text"
-                    placeholder="Ej.: Ratucha, Ratona, Hornero, Picaflor, Tero, Calandria…"
+                    placeholder="Ej.: Monarca, Mangangá, Vaquita, Ratucha, Hornero, Lagartija, Sapo…"
                     value={manualSearchQuery}
                     onChange={(e) => setManualSearchQuery(e.target.value)}
                   />
                 </div>
 
-                {(manualSearchQuery.trim().length > 0 || idResponse.candidates.length === 0) && (
+                {(manualSearchQuery.trim().length > 0 ||
+                  manualGroupFilter !== 'todos' ||
+                  idResponse.candidates.length === 0) && (
                   <>
                     <div className="visual-catalog-list">
-                      {combinedManualResults.slice(0, 12).map((sp) => {
+                      {combinedManualResults.slice(0, 14).map((sp) => {
                         const isSel = selectedTaxonId === sp.taxonId;
+                        const spGroupMeta = ORGANISM_GROUP_META[getSpeciesGroup(sp)];
                         return (
                           <div
                             key={sp.taxonId}
@@ -2990,8 +3200,20 @@ export const App: React.FC = () => {
                               size={54}
                             />
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 700, fontSize: '0.92rem' }}>
-                                {sp.commonNameAr}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <span style={{ fontWeight: 700, fontSize: '0.92rem' }}>
+                                  {sp.commonNameAr}
+                                </span>
+                                <span
+                                  className="group-pill micro"
+                                  style={{
+                                    background: spGroupMeta.accentBg,
+                                    color: spGroupMeta.accentText,
+                                    borderColor: spGroupMeta.accentBorder,
+                                  }}
+                                >
+                                  {spGroupMeta.emoji} {spGroupMeta.shortLabel}
+                                </span>
                               </div>
                               <div className="scientific-name" style={{ fontSize: '0.82rem' }}>
                                 {sp.scientificName}
@@ -3031,7 +3253,7 @@ export const App: React.FC = () => {
                         ) : (
                           <Globe size={15} />
                         )}
-                        Buscar «{manualSearchQuery.trim()}» en todo iNaturalist (Aves)
+                        Buscar «{manualSearchQuery.trim()}» en todo iNaturalist (Fauna y polinizadores)
                       </button>
                     )}
                   </>
@@ -3168,6 +3390,22 @@ export const App: React.FC = () => {
                 {/* Encabezado limpio y editorial de la especie */}
                 <div className="sheet-header-row">
                   <div>
+                    {(() => {
+                      const sheetGroupMeta = ORGANISM_GROUP_META[getSpeciesGroup(species)];
+                      return (
+                        <span
+                          className="group-pill"
+                          style={{
+                            background: sheetGroupMeta.accentBg,
+                            color: sheetGroupMeta.accentText,
+                            borderColor: sheetGroupMeta.accentBorder,
+                            marginBottom: 6,
+                          }}
+                        >
+                          {sheetGroupMeta.emoji} {sheetGroupMeta.label}
+                        </span>
+                      );
+                    })()}
                     <h2 className="serif-heading" style={{ fontSize: '2.1rem', margin: 0, lineHeight: 1.06 }}>
                       {species.commonNameAr}
                     </h2>
@@ -3307,6 +3545,20 @@ export const App: React.FC = () => {
                     {species.habitatTag && <span className="trait-chip">{species.habitatTag}</span>}
                     {species.dietTag && <span className="trait-chip">{species.dietTag}</span>}
                   </div>
+
+                  {(species.ecologicalRole || species.coexistenceNote) && (
+                    <div className="eco-role-card">
+                      <div className="eco-role-header">
+                        <Leaf size={14} /> Rol en tu jardín y convivencia
+                      </div>
+                      {species.ecologicalRole && (
+                        <div className="eco-role-primary">{species.ecologicalRole}</div>
+                      )}
+                      {species.coexistenceNote && (
+                        <p className="eco-role-note">{species.coexistenceNote}</p>
+                      )}
+                    </div>
+                  )}
 
                   <button
                     type="button"
@@ -3492,7 +3744,7 @@ export const App: React.FC = () => {
                                 >
                                   {getAllKnownSpecies().map((sp) => (
                                     <option key={sp.taxonId} value={sp.taxonId}>
-                                      {sp.commonNameAr} ({sp.scientificName})
+                                      {ORGANISM_GROUP_META[getSpeciesGroup(sp)].emoji} {sp.commonNameAr} ({sp.scientificName})
                                     </option>
                                   ))}
                                 </select>
@@ -3732,16 +3984,16 @@ export const App: React.FC = () => {
           {/* Instalación como app (PWA sin barra de direcciones) */}
           <div className="callout-box" style={{ marginBottom: 14 }}>
             <div style={{ fontWeight: 700, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Smartphone size={16} /> Instalar Birdy como aplicación
+              <Smartphone size={16} /> Instalar Bioma como aplicación
             </div>
             {isStandaloneApp ? (
               <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--botanical-green-dark)' }}>
-                Ya estás usando Birdy en modo aplicación a pantalla completa.
+                Ya estás usando Bioma en modo aplicación a pantalla completa.
               </p>
             ) : installPromptEvent ? (
               <div>
                 <p style={{ margin: '0 0 10px', fontSize: '0.83rem', color: 'var(--ink-secondary)' }}>
-                  Instalá Birdy en la pantalla de inicio para abrirla como una app nativa, sin
+                  Instalá Bioma en la pantalla de inicio para abrirla como una app nativa, sin
                   barra de direcciones del navegador.
                 </p>
                 <button
@@ -3938,7 +4190,7 @@ export const App: React.FC = () => {
             className="bottom-nav-fab"
             onClick={() => startAddSightingFlow()}
           >
-            <Camera size={19} /> Registrar ave
+            <Camera size={19} /> Registrar hallazgo
           </button>
 
           <button

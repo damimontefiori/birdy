@@ -1,9 +1,15 @@
 import {
   buildStableTaxonIdFromScientificName,
   findSpeciesByScientificName,
+  inferOrganismGroupFromMeta,
   registerCustomSpecies,
 } from '../data/argentinaBirdsCatalog';
-import { SpeciesCatalogEntry, SpeciesReferencePhoto } from '../types/domain';
+import {
+  ORGANISM_GROUP_META,
+  OrganismGroup,
+  SpeciesCatalogEntry,
+  SpeciesReferencePhoto,
+} from '../types/domain';
 
 interface CachedReference {
   savedAt: number;
@@ -136,7 +142,7 @@ export async function fetchReferencePhotosForSpecies(
         const directRes = await fetch(
           `https://api.inaturalist.org/v1/taxa?q=${encodeURIComponent(
             cleanSci
-          )}&taxon_id=3&locale=es-AR&preferred_place_id=7190&per_page=3`
+          )}&taxon_id=1&locale=es-AR&preferred_place_id=7190&per_page=4`
         );
         if (directRes.ok) {
           const json = (await directRes.json()) as {
@@ -204,7 +210,8 @@ export async function fetchReferencePhotosForSpecies(
 }
 
 /**
- * Busca aves en vivo en iNaturalist (Clase Aves) para encontrar cualquier especie
+ * Busca fauna y polinizadores en vivo en iNaturalist (Reino Animalia: aves, mariposas,
+ * abejas, abejorros, insectos, arañas y fauna vecina) para encontrar cualquier especie
  * que no figure todavía en el catálogo inicial de Argentina.
  */
 export async function searchLiveBirdsInNaturalist(
@@ -219,6 +226,8 @@ export async function searchLiveBirdsInNaturalist(
       inaturalistTaxonId: number;
       scientificName: string;
       commonNameAr: string;
+      iconicTaxonName?: string;
+      organismGroup?: OrganismGroup;
       wikipediaUrl?: string;
       referencePhotos: SpeciesReferencePhoto[];
     }> = [];
@@ -237,7 +246,7 @@ export async function searchLiveBirdsInNaturalist(
       const directRes = await fetch(
         `https://api.inaturalist.org/v1/taxa?q=${encodeURIComponent(
           clean
-        )}&taxon_id=3&rank=species&locale=es-AR&preferred_place_id=7190&per_page=8`
+        )}&taxon_id=1&rank=species,genus&locale=es-AR&preferred_place_id=7190&per_page=10`
       );
       if (directRes.ok) {
         const json = (await directRes.json()) as {
@@ -245,16 +254,24 @@ export async function searchLiveBirdsInNaturalist(
             id: number;
             name: string;
             preferred_common_name?: string;
+            iconic_taxon_name?: string;
             wikipedia_url?: string;
             default_photo?: { medium_url?: string; url?: string; attribution?: string };
           }>;
         };
         rawResults = (json.results || []).map((t) => {
           const base = t.default_photo?.medium_url || t.default_photo?.url || '';
+          const commonAr = t.preferred_common_name || t.name;
           return {
             inaturalistTaxonId: t.id,
             scientificName: t.name,
-            commonNameAr: t.preferred_common_name || t.name,
+            commonNameAr: commonAr,
+            iconicTaxonName: t.iconic_taxon_name,
+            organismGroup: inferOrganismGroupFromMeta({
+              iconicTaxonName: t.iconic_taxon_name,
+              scientificName: t.name,
+              commonName: commonAr,
+            }),
             wikipediaUrl: t.wikipedia_url,
             referencePhotos: base
               ? [
@@ -284,17 +301,29 @@ export async function searchLiveBirdsInNaturalist(
         });
       }
 
+      const group = inferOrganismGroupFromMeta({
+        organismGroup: item.organismGroup,
+        iconicTaxonName: item.iconicTaxonName,
+        scientificName: item.scientificName,
+        commonName: item.commonNameAr,
+      });
+      const groupMeta = ORGANISM_GROUP_META[group];
+
       const entry: SpeciesCatalogEntry = {
         taxonId: buildStableTaxonIdFromScientificName(item.scientificName),
+        organismGroup: group,
         scientificName: item.scientificName,
         commonNameAr: item.commonNameAr,
         alternativeNames: [],
-        family: 'Aves (iNaturalist)',
-        quickSummary: `${item.commonNameAr} (${item.scientificName}) registrada en el catálogo naturalista.`,
-        identificationTraits: `Compará plumaje, pico y postura con las fotografías de referencia de ${item.commonNameAr}.`,
-        typicalBehavior: 'Observación incorporada desde el catálogo ampliado de aves.',
-        dietAndHabitat: 'Consultar notas locales según la región del avistamiento.',
-        generalDistribution: 'Avifauna documentada en iNaturalist.',
+        family: item.iconicTaxonName
+          ? `${item.iconicTaxonName} · ${groupMeta.label}`
+          : `${groupMeta.label} (iNaturalist)`,
+        quickSummary: `${item.commonNameAr} (${item.scientificName}) registrada en el catálogo naturalista de iNaturalist.`,
+        ecologicalRole: `Especie de ${groupMeta.label.toLowerCase()} documentada en tu bioma`,
+        identificationTraits: `Compará colores, formas y silueta con las fotografías de referencia de ${item.commonNameAr}.`,
+        typicalBehavior: 'Observación incorporada desde el catálogo naturalista ampliado (iNaturalist).',
+        dietAndHabitat: 'Consultar notas locales según el jardín o región del encuentro.',
+        generalDistribution: 'Fauna documentada en iNaturalist.',
         typicalRegionsAr: [],
         referencePhotos: item.referencePhotos,
         wikipediaUrl: item.wikipediaUrl,

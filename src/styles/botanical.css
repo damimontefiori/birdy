@@ -1689,3 +1689,167 @@ select,
   color: rgba(255, 253, 248, 0.55);
   margin-top: 4px;
 }
+
+
+/* ============================================================================
+   Bioma: Filtros por grupo biológico, insignias y tarjeta de rol ecológico
+   ============================================================================ */
+.welcome-groups-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.group-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-edge);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.group-pill.micro {
+  padding: 2px 7px;
+  font-size: 0.68rem;
+}
+
+.group-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow-x: auto;
+  padding: 2px 2px 10px;
+  margin-bottom: 4px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.group-filter-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.group-filter-bar.compact {
+  padding-bottom: 4px;
+}
+
+.group-filter-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 12px;
+  min-height: 36px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-edge);
+  background: #FFFDF8;
+  color: var(--ink-primary);
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.group-filter-chip.empty {
+  opacity: 0.72;
+}
+
+.group-filter-chip.active {
+  background: var(--botanical-green);
+  color: #FFFDF8;
+  border-color: var(--botanical-green);
+  opacity: 1;
+}
+
+.plate-frame {
+  position: relative;
+}
+
+.plate-group-corner-tag {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.25;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  box-shadow: 0 2px 6px rgba(34, 28, 20, 0.12);
+}
+
+.notebook-biome-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 8px 0 6px;
+}
+
+.biome-mini-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.eco-role-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(235, 243, 236, 0.92), rgba(247, 242, 230, 0.92));
+  border: 1px solid rgba(56, 87, 62, 0.24);
+}
+
+.eco-role-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--botanical-green-dark);
+  margin-bottom: 4px;
+}
+
+.eco-role-primary {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--ink-primary);
+  line-height: 1.32;
+}
+
+.eco-role-note {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: var(--ink-secondary);
+  line-height: 1.4;
+}
+
+.eco-role-inline {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--botanical-sage-soft);
+  border: 1px solid rgba(56, 87, 62, 0.22);
+  font-size: 0.82rem;
+  color: var(--botanical-green-dark);
+  line-height: 1.38;
+}
