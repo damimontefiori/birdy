@@ -16,6 +16,7 @@ import {
   identifyBirdWithGemini,
   inferServerOrganismGroup,
   isAllowedImageProxyUrl,
+  resolveActiveVisionModel,
   resolveServerEnv,
   searchINaturalistBirds,
   serverFetch,
@@ -151,6 +152,11 @@ export async function handleBirdyApiRequest(
   // 1. Estado del servidor, IA y autenticación (sin exponer secretos ni correos)
   if (pathname === '/api/health' && method === 'GET') {
     const env = resolveServerEnv();
+    const visionFallbackProviders: string[] = [];
+    if (env.GROQ_API_KEY) visionFallbackProviders.push('Groq Vision (Llama 4 Scout)');
+    if (env.OPENROUTER_API_KEY) visionFallbackProviders.push('OpenRouter Vision (:free)');
+    if (env.HUGGINGFACE_API_KEY) visionFallbackProviders.push('Hugging Face Vision (Qwen2.5-VL)');
+
     const imageFallbackProviders: string[] = [];
     if (env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN) {
       imageFallbackProviders.push('Cloudflare Workers AI (FLUX.1-schnell)');
@@ -160,13 +166,14 @@ export async function handleBirdyApiRequest(
     }
     sendJson(res, 200, {
       ok: true,
-      aiConfigured: Boolean(env.GEMINI_API_KEY),
+      aiConfigured: Boolean(env.GEMINI_API_KEY || visionFallbackProviders.length > 0),
       illustrationCloudConfigured: Boolean(
         env.GEMINI_API_KEY || imageFallbackProviders.length > 0
       ),
+      visionFallbackProviders,
       imageFallbackProviders,
       provider: 'gemini',
-      visionModel: env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
+      visionModel: resolveActiveVisionModel(env),
       imageModel: env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-lite-image',
       auth: getAuthConfigStatus(env),
     });
@@ -305,11 +312,16 @@ export async function handleBirdyApiRequest(
       return true;
     }
 
-    if (!env.GEMINI_API_KEY) {
+    if (
+      !env.GEMINI_API_KEY &&
+      !env.GROQ_API_KEY &&
+      !env.OPENROUTER_API_KEY &&
+      !env.HUGGINGFACE_API_KEY
+    ) {
       sendJson(res, 503, {
         error: 'GEMINI_API_KEY_MISSING',
         message:
-          'Falta configurar GEMINI_API_KEY en el archivo .env del servidor para analizar fotografías reales.',
+          'Falta configurar GEMINI_API_KEY (o GROQ_API_KEY) en el servidor para analizar fotografías reales.',
       });
       return true;
     }
@@ -338,10 +350,28 @@ export async function handleBirdyApiRequest(
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Error inesperado';
-      console.error('[Birdy API] /api/identify-bird error:', msg);
+      console.error('[Bioma API] /api/identify-bird error:', msg);
+      if (msg.includes('GEMINI_HIGH_DEMAND')) {
+        sendJson(res, 503, {
+          error: 'GEMINI_HIGH_DEMAND',
+          message:
+            'Los servidores de Google Gemini tienen un pico momentáneo de demanda. Esperá unos segundos y tocá «Reintentar análisis con IA».',
+          detail: msg.slice(0, 220),
+        });
+        return true;
+      }
+      if (msg.includes('GEMINI_QUOTA_EXCEEDED')) {
+        sendJson(res, 429, {
+          error: 'GEMINI_QUOTA_EXCEEDED',
+          message:
+            'Se alcanzó temporalmente el límite por minuto de tu clave gratuita de Gemini. Esperá 1 minuto y reintentá.',
+          detail: msg.slice(0, 220),
+        });
+        return true;
+      }
       sendJson(res, 502, {
         error: 'IDENTIFICATION_FAILED',
-        message: 'No pudimos completar el análisis visual con Gemini en este momento.',
+        message: 'No pudimos completar el análisis visual en este momento. Probá reintentar.',
         detail: msg.slice(0, 220),
       });
       return true;

@@ -30,8 +30,10 @@ import {
 } from '../../server/authService';
 import {
   buildNaturalistIllustrationPrompt,
+  DEFAULT_VISION_MODELS,
   inferServerOrganismGroup,
   isAllowedImageProxyUrl,
+  resolveActiveVisionModel,
 } from '../../server/secureAiProxy';
 import { renderBotanicalPlateFromImage } from '../services/watercolorCanvasRenderer';
 
@@ -393,5 +395,19 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
     expect(muralPrompt).toContain('Danaus erippus');
     expect(muralPrompt).toContain('NO text');
     expect(muralPrompt).toContain('NO graffiti tags');
+
+    // Ningún modelo obsoleto 2.x (404) debe quedar en la lista activa de visión ni pasar desde env viejo
+    expect(DEFAULT_VISION_MODELS).not.toContain('gemini-2.0-flash');
+    expect(DEFAULT_VISION_MODELS).not.toContain('gemini-2.5-flash');
+    expect(DEFAULT_VISION_MODELS[0]).toBe('gemini-3.1-flash-lite');
+    expect(resolveActiveVisionModel({ GEMINI_VISION_MODEL: 'gemini-2.0-flash' })).toBe(
+      'gemini-3.1-flash-lite'
+    );
+    expect(resolveActiveVisionModel({ GEMINI_VISION_MODEL: 'gemini-2.5-flash' })).toBe(
+      'gemini-3.1-flash-lite'
+    );
+    expect(resolveActiveVisionModel({ GEMINI_VISION_MODEL: 'gemini-3.5-flash-lite' })).toBe(
+      'gemini-3.5-flash-lite'
+    );
   });
 });

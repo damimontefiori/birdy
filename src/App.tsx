@@ -3945,8 +3945,11 @@ export const App: React.FC = () => {
             {aiHealth?.aiConfigured ? (
               <div style={{ marginTop: 6, fontSize: '0.84rem', color: 'var(--ink-secondary)' }}>
                 <p style={{ margin: 0 }}>
-                  Visión conectada ({aiHealth.visionModel}) + referencias visuales reales de
-                  iNaturalist.
+                  Visión conectada ({aiHealth.visionModel})
+                  {aiHealth.visionFallbackProviders && aiHealth.visionFallbackProviders.length > 0
+                    ? ` + respaldo ${aiHealth.visionFallbackProviders.join(' / ')}`
+                    : ''}{' '}
+                  + referencias reales de iNaturalist.
                 </p>
                 <p style={{ margin: '4px 0 0', fontSize: '0.8rem' }}>
                   {aiHealth.imageFallbackProviders && aiHealth.imageFallbackProviders.length > 0 ? (

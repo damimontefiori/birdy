@@ -64,6 +64,8 @@ export interface ServerEnv {
   GEMINI_API_KEY?: string;
   GEMINI_VISION_MODEL?: string;
   GEMINI_IMAGE_MODEL?: string;
+  GROQ_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
   HUGGINGFACE_API_KEY?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
@@ -104,13 +106,46 @@ const ALLOWED_IMAGE_PROXY_HOSTS = new Set([
   'upload.wikimedia.org',
 ]);
 
-const DEFAULT_VISION_MODELS = ['gemini-2.5-flash', 'gemini-3-flash-preview', 'gemini-2.0-flash'];
+export const DEFAULT_VISION_MODELS = [
+  'gemini-3.1-flash-lite',
+  'gemini-3.5-flash-lite',
+  'gemini-flash-lite-latest',
+  'gemini-3.1-flash-lite-preview',
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-flash-latest',
+  'gemini-3-flash-preview',
+  'gemma-4-31b-it',
+  'gemma-4-26b-a4b-it',
+];
+const KNOWN_RETIRED_VISION_MODELS = new Set([
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash-exp',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-pro',
+]);
+
+export function resolveActiveVisionModel(env: ServerEnv): string {
+  const configured = env.GEMINI_VISION_MODEL?.trim();
+  if (configured && !KNOWN_RETIRED_VISION_MODELS.has(configured.toLowerCase())) {
+    return configured;
+  }
+  return DEFAULT_VISION_MODELS[0];
+}
 const DEFAULT_IMAGE_MODELS = [
   'gemini-3.1-flash-lite-image',
   'gemini-3.1-flash-image-preview',
   'gemini-3.1-flash-image',
   'gemini-2.5-flash-image',
 ];
+
+// Memoria efímera de salud de modelos para ir directo al modelo que mejor responde y saltear 404 obsoletos
+let lastWorkingVisionModel: { model: string; expiresAt: number } | null = null;
+const deprecatedVisionModels = new Set<string>();
+const WORKING_MODEL_TTL_MS = 1000 * 60 * 15; // 15 minutos
 
 const inatSpeciesCache = new Map<string, { expiresAt: number; data: BirdReferenceDTO | null }>();
 const inatSearchCache = new Map<string, { expiresAt: number; data: BirdReferenceDTO[] }>();
@@ -153,6 +188,9 @@ export function resolveServerEnv(cwd: string = process.cwd()): ServerEnv {
       (process.env.GEMINI_VISION_MODEL || fileVars.GEMINI_VISION_MODEL || '').trim() || undefined,
     GEMINI_IMAGE_MODEL:
       (process.env.GEMINI_IMAGE_MODEL || fileVars.GEMINI_IMAGE_MODEL || '').trim() || undefined,
+    GROQ_API_KEY: (process.env.GROQ_API_KEY || fileVars.GROQ_API_KEY || '').trim() || undefined,
+    OPENROUTER_API_KEY:
+      (process.env.OPENROUTER_API_KEY || fileVars.OPENROUTER_API_KEY || '').trim() || undefined,
     HUGGINGFACE_API_KEY:
       (
         process.env.HUGGINGFACE_API_KEY ||
@@ -702,8 +740,150 @@ const IDENTIFICATION_RESPONSE_SCHEMA = {
   required: ['confidenceLevel', 'explanation', 'candidates'],
 };
 
+function extractIdentificationJson(rawText: string): GeminiRawIdentification | null {
+  const cleaned = rawText
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+
+  const tryParse = (candidate: string): GeminiRawIdentification | null => {
+    try {
+      const obj = JSON.parse(candidate) as Partial<GeminiRawIdentification>;
+      if (obj && typeof obj === 'object' && Array.isArray(obj.candidates) && typeof obj.explanation === 'string') {
+        const conf =
+          obj.confidenceLevel === 'alta' ||
+          obj.confidenceLevel === 'media' ||
+          obj.confidenceLevel === 'insuficiente'
+            ? obj.confidenceLevel
+            : obj.candidates.length > 0
+              ? 'media'
+              : 'insuficiente';
+        return {
+          confidenceLevel: conf,
+          explanation: obj.explanation,
+          uncertaintyReason: obj.uncertaintyReason ?? null,
+          proposedScientificName: obj.proposedScientificName ?? null,
+          candidates: obj.candidates,
+        };
+      }
+    } catch {
+      // probar recorte de llaves
+    }
+    return null;
+  };
+
+  const direct = tryParse(cleaned);
+  if (direct) return direct;
+
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return tryParse(cleaned.slice(firstBrace, lastBrace + 1));
+  }
+  return null;
+}
+
+const COMPACT_JSON_FORMAT_INSTRUCTIONS = `
+Respondé ÚNICAMENTE con un objeto JSON válido (sin texto ni markdown alrededor) con esta estructura exacta:
+{
+  "confidenceLevel": "alta" | "media" | "insuficiente",
+  "explanation": "1-2 oraciones en español rioplatense",
+  "uncertaintyReason": null | "motivo breve si es media o insuficiente",
+  "proposedScientificName": "Nombre científico o null",
+  "candidates": [
+    {
+      "organismGroup": "aves" | "mariposas" | "abejas_abejorros" | "insectos_aracnidos" | "fauna_vecina",
+      "commonNameAr": "Nombre común en Argentina",
+      "scientificName": "Genero especie",
+      "alternativeNames": ["apodo1"],
+      "family": "Familia",
+      "confidenceBand": "Muy probable" | "Posible candidata" | "Baja certeza",
+      "reasoning": "Razón visual concreta",
+      "keyVisibleTraits": ["rasgo 1", "rasgo 2", "rasgo 3"],
+      "quickSummary": "Resumen en 1 oración (<115 caracteres)",
+      "sizeLabel": "Tamaño aproximado",
+      "habitatTag": "Hábitat breve",
+      "dietTag": "Dieta breve",
+      "ecologicalRole": "Rol ecológico en el jardín",
+      "coexistenceNote": "Nota serena de convivencia",
+      "identificationTraits": "Rasgos clave",
+      "typicalBehavior": "Comportamiento típico",
+      "dietAndHabitat": "Alimentación y hábitat",
+      "generalDistribution": "Distribución en Argentina"
+    }
+  ]
+}
+`.trim();
+
 /**
- * Identifica un ave real a partir de su fotografía usando Google Gemini Vision
+ * Proveedor OpenAI-compatible de respaldo gratuito para visión multimodal
+ * (Groq Llama 4 Scout, OpenRouter :free o Hugging Face Qwen2.5-VL) cuando Gemini tiene pico 503/cuota.
+ */
+async function identifyWithOpenAiCompatibleVision(params: {
+  providerLabel: string;
+  endpoint: string;
+  apiKey: string;
+  models: string[];
+  dataUrl: string;
+  userPrompt: string;
+  extraHeaders?: Record<string, string>;
+}): Promise<{ parsed: GeminiRawIdentification; usedModel: string; providerLabel: string } | null> {
+  for (const model of params.models) {
+    try {
+      const res = await serverFetch(params.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${params.apiKey}`,
+          ...(params.extraHeaders || {}),
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0.2,
+          max_tokens: 1800,
+          messages: [
+            {
+              role: 'system',
+              content: `${SYSTEM_PROMPT_IDENTIFICACION_BIOMA_AR}\n\n${COMPACT_JSON_FORMAT_INSTRUCTIONS}`,
+            },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: params.userPrompt },
+                { type: 'image_url', image_url: { url: params.dataUrl } },
+              ],
+            },
+          ],
+        }),
+        signal: AbortSignal.timeout(22000),
+      });
+
+      if (!res.ok) continue;
+      const json = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = json.choices?.[0]?.message?.content?.trim();
+      if (!content) continue;
+
+      const parsed = extractIdentificationJson(content);
+      if (parsed) {
+        return {
+          parsed,
+          usedModel: model,
+          providerLabel: params.providerLabel,
+        };
+      }
+    } catch {
+      // continuar con siguiente modelo/proveedor
+    }
+  }
+  return null;
+}
+
+/**
+ * Identifica un ser vivo real a partir de su fotografía usando Google Gemini 3.x / Gemma 4 Vision
+ * (con rotación inteligente, reintentos ante 503 y respaldos gratuitos opcionales de Groq/OpenRouter/HF),
  * y enriquece las especies candidatas con fotos reales de referencia de iNaturalist.
  */
 export async function identifyBirdWithGemini(
@@ -725,7 +905,10 @@ export async function identifyBirdWithGemini(
   aiMode: 'gemini';
   modelUsed: string;
 }> {
-  if (!env.GEMINI_API_KEY) {
+  const hasAnyVisionProvider = Boolean(
+    env.GEMINI_API_KEY || env.GROQ_API_KEY || env.OPENROUTER_API_KEY || env.HUGGINGFACE_API_KEY
+  );
+  if (!hasAnyVisionProvider) {
     throw new Error('GEMINI_API_KEY_MISSING');
   }
 
@@ -751,86 +934,304 @@ export async function identifyBirdWithGemini(
     .filter(Boolean)
     .join('\n');
 
-  const modelsToTry = Array.from(
-    new Set([env.GEMINI_VISION_MODEL, ...DEFAULT_VISION_MODELS].filter(Boolean) as string[])
-  );
-
   let parsedResult: GeminiRawIdentification | null = null;
-  let usedModel = modelsToTry[0];
-  let lastErrorText = '';
+  let usedModel = '';
+  let usedProviderLabel = 'Google Gemini';
+  let sawHighDemand503 = false;
+  let sawQuota429 = false;
+  const attemptErrors: string[] = [];
 
-  for (const model of modelsToTry) {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-      model
-    )}:generateContent`;
+  // 1. Google Gemini 3.x / Gemma 4 (priorizando flash-lite estables + wave hedged ante picos 503)
+  if (env.GEMINI_API_KEY) {
+    const cachedHealthy =
+      lastWorkingVisionModel && lastWorkingVisionModel.expiresAt > Date.now()
+        ? lastWorkingVisionModel.model
+        : null;
 
-    const response = await serverFetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': env.GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: SYSTEM_PROMPT_IDENTIFICACION_AVES_AR }],
-        },
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: userPrompt },
+    const configuredModel =
+      env.GEMINI_VISION_MODEL && !KNOWN_RETIRED_VISION_MODELS.has(env.GEMINI_VISION_MODEL.toLowerCase())
+        ? env.GEMINI_VISION_MODEL
+        : null;
+
+    const rawModels = Array.from(
+      new Set(
+        [cachedHealthy, configuredModel, ...DEFAULT_VISION_MODELS].filter(
+          (m): m is string =>
+            Boolean(m) &&
+            !deprecatedVisionModels.has(m!) &&
+            !KNOWN_RETIRED_VISION_MODELS.has(m!.toLowerCase())
+        )
+      )
+    );
+
+    const tryGeminiModel = async (
+      model: string,
+      timeoutMs: number,
+      externalSignal?: AbortSignal
+    ): Promise<{ parsed: GeminiRawIdentification; usedModel: string; usedProviderLabel: string } | null> => {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        model
+      )}:generateContent`;
+      const isGemma = /^gemma-/i.test(model);
+
+      const requestBody = isGemma
+        ? {
+            contents: [
               {
-                inlineData: {
-                  mimeType: parsedImage.mimeType,
-                  data: parsedImage.base64Data,
-                },
+                role: 'user',
+                parts: [
+                  {
+                    text: `${SYSTEM_PROMPT_IDENTIFICACION_BIOMA_AR}\n\n${COMPACT_JSON_FORMAT_INSTRUCTIONS}\n\n${userPrompt}`,
+                  },
+                  {
+                    inlineData: {
+                      mimeType: parsedImage.mimeType,
+                      data: parsedImage.base64Data,
+                    },
+                  },
+                ],
               },
             ],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 2048,
+            },
+          }
+        : {
+            systemInstruction: {
+              parts: [{ text: SYSTEM_PROMPT_IDENTIFICACION_BIOMA_AR }],
+            },
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  { text: userPrompt },
+                  {
+                    inlineData: {
+                      mimeType: parsedImage.mimeType,
+                      data: parsedImage.base64Data,
+                    },
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.2,
+              responseMimeType: 'application/json',
+              responseSchema: IDENTIFICATION_RESPONSE_SCHEMA,
+              maxOutputTokens: 2048,
+            },
+          };
+
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      const signal = externalSignal
+        ? AbortSignal.any([timeoutSignal, externalSignal])
+        : timeoutSignal;
+
+      try {
+        const response = await serverFetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': env.GEMINI_API_KEY!,
           },
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: 'application/json',
-          responseSchema: IDENTIFICATION_RESPONSE_SCHEMA,
-        },
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
+          body: JSON.stringify(requestBody),
+          signal,
+        });
 
-    if (!response.ok) {
-      const errBody = await response.text().catch(() => '');
-      lastErrorText = `${model} (${response.status}): ${errBody.slice(0, 260)}`;
-      if ([400, 404, 429, 503].includes(response.status)) {
-        continue;
+        if (!response.ok) {
+          const errBody = await response.text().catch(() => '');
+          if (response.status === 404) {
+            deprecatedVisionModels.add(model);
+          } else if (response.status === 503) {
+            sawHighDemand503 = true;
+          } else if (response.status === 429) {
+            sawQuota429 = true;
+          }
+          attemptErrors.push(`${model} (${response.status})`);
+          if (response.status === 401 || response.status === 403) {
+            throw new Error(`GEMINI_AUTH_ERROR: ${model} (${response.status}): ${errBody.slice(0, 180)}`);
+          }
+          return null;
+        }
+
+        const payload = (await response.json()) as {
+          candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>;
+        };
+        const rawText = (payload.candidates?.[0]?.content?.parts || [])
+          .filter((p) => !p.thought && typeof p.text === 'string')
+          .map((p) => p.text || '')
+          .join('')
+          .trim();
+
+        if (!rawText) {
+          attemptErrors.push(`${model} (vacía)`);
+          return null;
+        }
+
+        const extracted = extractIdentificationJson(rawText);
+        if (extracted) {
+          lastWorkingVisionModel = { model, expiresAt: Date.now() + WORKING_MODEL_TTL_MS };
+          return {
+            parsed: extracted,
+            usedModel: model,
+            usedProviderLabel: isGemma ? 'Google Gemma' : 'Google Gemini',
+          };
+        }
+        attemptErrors.push(`${model} (JSON)`);
+        return null;
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('GEMINI_AUTH_ERROR')) {
+          throw err;
+        }
+        if (externalSignal?.aborted) {
+          return null;
+        }
+        attemptErrors.push(`${model} (timeout/red)`);
+        return null;
       }
-      throw new Error(`GEMINI_API_ERROR: ${lastErrorText}`);
-    }
-
-    const payload = (await response.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
     };
-    const rawText = payload.candidates?.[0]?.content?.parts
-      ?.map((p) => p.text || '')
-      .join('')
-      .trim();
 
-    if (!rawText) {
-      lastErrorText = `${model}: respuesta vacía`;
-      continue;
+    const raceGeminiWave = async (
+      models: string[],
+      timeoutMs: number
+    ): Promise<{ parsed: GeminiRawIdentification; usedModel: string; usedProviderLabel: string } | null> => {
+      const uniqueWave = Array.from(new Set(models)).filter(Boolean);
+      if (uniqueWave.length === 0) return null;
+      if (uniqueWave.length === 1) {
+        return tryGeminiModel(uniqueWave[0], timeoutMs);
+      }
+      const controller = new AbortController();
+      try {
+        return await Promise.any(
+          uniqueWave.map(async (model) => {
+            const hit = await tryGeminiModel(model, timeoutMs, controller.signal);
+            if (!hit) {
+              throw new Error(`MISS:${model}`);
+            }
+            controller.abort();
+            return hit;
+          })
+        );
+      } catch (err) {
+        if (err instanceof AggregateError) {
+          const authErr = err.errors.find(
+            (e) => e instanceof Error && e.message.startsWith('GEMINI_AUTH_ERROR')
+          );
+          if (authErr) throw authErr;
+        } else if (err instanceof Error && err.message.startsWith('GEMINI_AUTH_ERROR')) {
+          throw err;
+        }
+        return null;
+      }
+    };
+
+    // Etapa 1: 1 intento rápido al modelo más saludable (2–5s en condiciones normales, sin desperdiciar cuota)
+    if (rawModels[0]) {
+      const firstHit = await tryGeminiModel(rawModels[0], 11000);
+      if (firstHit) {
+        parsedResult = firstHit.parsed;
+        usedModel = firstHit.usedModel;
+        usedProviderLabel = firstHit.usedProviderLabel;
+      }
     }
 
-    try {
-      const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
-      parsedResult = JSON.parse(cleaned) as GeminiRawIdentification;
-      usedModel = model;
-      break;
-    } catch {
-      lastErrorText = `${model}: JSON inválido`;
+    // Etapa 2: si el primero falló (503/timeout), lanzar ola paralela hedged de los 2 siguientes flash-lite
+    if (!parsedResult && rawModels.length > 1) {
+      const wave2Hit = await raceGeminiWave(rawModels.slice(1, 3), 12000);
+      if (wave2Hit) {
+        parsedResult = wave2Hit.parsed;
+        usedModel = wave2Hit.usedModel;
+        usedProviderLabel = wave2Hit.usedProviderLabel;
+      }
+    }
+
+    // Etapa 3: si no hay Groq/OpenRouter configurado y hubo pico 503, esperar 900ms y lanzar ola de recuperación
+    if (!parsedResult && !env.GROQ_API_KEY && !env.OPENROUTER_API_KEY) {
+      await new Promise((r) => setTimeout(r, 900));
+      const recoveryModels = [rawModels[0], rawModels[4] || rawModels[3] || rawModels[1]].filter(
+        Boolean
+      );
+      const wave3Hit = await raceGeminiWave(recoveryModels, 12000);
+      if (wave3Hit) {
+        parsedResult = wave3Hit.parsed;
+        usedModel = wave3Hit.usedModel;
+        usedProviderLabel = wave3Hit.usedProviderLabel;
+      }
+    }
+  }
+
+  // 2. Respaldo gratuito ultrarrápido (sin tarjeta): Groq Vision — Llama 4 Scout
+  if (!parsedResult && env.GROQ_API_KEY) {
+    const groqRes = await identifyWithOpenAiCompatibleVision({
+      providerLabel: 'Groq Vision',
+      endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+      apiKey: env.GROQ_API_KEY,
+      models: [
+        'meta-llama/llama-4-scout-17b-16e-instruct',
+        'meta-llama/llama-4-maverick-17b-128e-instruct',
+      ],
+      dataUrl: req.sanitizedPhotoDataUrl,
+      userPrompt,
+    });
+    if (groqRes) {
+      parsedResult = groqRes.parsed;
+      usedModel = groqRes.usedModel;
+      usedProviderLabel = groqRes.providerLabel;
+    }
+  }
+
+  // 3. Respaldo gratuito (sin tarjeta): OpenRouter Vision (:free)
+  if (!parsedResult && env.OPENROUTER_API_KEY) {
+    const orRes = await identifyWithOpenAiCompatibleVision({
+      providerLabel: 'OpenRouter Vision',
+      endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+      apiKey: env.OPENROUTER_API_KEY,
+      models: [
+        'meta-llama/llama-4-scout:free',
+        'google/gemma-3-27b-it:free',
+        'qwen/qwen2.5-vl-72b-instruct:free',
+      ],
+      dataUrl: req.sanitizedPhotoDataUrl,
+      userPrompt,
+      extraHeaders: {
+        'HTTP-Referer': 'https://birdy-3zfr.onrender.com',
+        'X-Title': 'Bioma Cuaderno Vivo',
+      },
+    });
+    if (orRes) {
+      parsedResult = orRes.parsed;
+      usedModel = orRes.usedModel;
+      usedProviderLabel = orRes.providerLabel;
+    }
+  }
+
+  // 4. Respaldo gratuito (sin tarjeta): Hugging Face Router Vision (Qwen2.5-VL)
+  if (!parsedResult && env.HUGGINGFACE_API_KEY) {
+    const hfRes = await identifyWithOpenAiCompatibleVision({
+      providerLabel: 'Hugging Face Vision',
+      endpoint: 'https://router.huggingface.co/v1/chat/completions',
+      apiKey: env.HUGGINGFACE_API_KEY,
+      models: ['Qwen/Qwen2.5-VL-7B-Instruct', 'meta-llama/Llama-3.2-11B-Vision-Instruct'],
+      dataUrl: req.sanitizedPhotoDataUrl,
+      userPrompt,
+    });
+    if (hfRes) {
+      parsedResult = hfRes.parsed;
+      usedModel = hfRes.usedModel;
+      usedProviderLabel = hfRes.providerLabel;
     }
   }
 
   if (!parsedResult) {
-    throw new Error(`GEMINI_FAILED: ${lastErrorText || 'Sin respuesta válida'}`);
+    const summary = attemptErrors.slice(0, 6).join(', ') || 'Sin respuesta válida';
+    if (sawHighDemand503) {
+      throw new Error(`GEMINI_HIGH_DEMAND: Pico temporal de demanda en Google (${summary})`);
+    }
+    if (sawQuota429) {
+      throw new Error(`GEMINI_QUOTA_EXCEEDED: Límite temporal de cuota alcanzado (${summary})`);
+    }
+    throw new Error(`GEMINI_FAILED: ${summary}`);
   }
 
   // Enriquecer candidatas con fotos reales de referencia de iNaturalist en paralelo
@@ -894,7 +1295,7 @@ export async function identifyBirdWithGemini(
     explanation: parsedResult.explanation,
     uncertaintyReason: parsedResult.uncertaintyReason || null,
     fromCache: false,
-    taxonomicSource: `Google Gemini (${usedModel}) + Referencias visuales iNaturalist (es_AR)`,
+    taxonomicSource: `${usedProviderLabel} (${usedModel}) + Referencias visuales iNaturalist (es_AR)`,
     aiMode: 'gemini',
     modelUsed: usedModel,
   };

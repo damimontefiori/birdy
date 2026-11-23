@@ -58,6 +58,7 @@ export interface BackendAiHealth {
   ok: boolean;
   aiConfigured: boolean;
   illustrationCloudConfigured?: boolean;
+  visionFallbackProviders?: string[];
   imageFallbackProviders?: string[];
   provider: string;
   visionModel?: string;
@@ -204,7 +205,53 @@ function normalizeAndRegisterCandidate(raw: AICandidate): AICandidate {
 }
 
 /**
- * Servicio de identificación de aves asistida por IA.
+ * Crea una copia liviana (~70–130 KB, máx. 896px) exclusivamente para el envío a la IA de visión,
+ * acelerando la subida desde 4G/móvil y evitando timeouts sin tocar la foto original guardada.
+ */
+async function createCompactVisionDataUrl(sourceDataUrl: string, maxDim = 896): Promise<string> {
+  if (
+    typeof Image === 'undefined' ||
+    typeof document === 'undefined' ||
+    isTestEnvironment() ||
+    !sourceDataUrl.startsWith('data:image/')
+  ) {
+    return sourceDataUrl;
+  }
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (!w || !h) {
+          resolve(sourceDataUrl);
+          return;
+        }
+        const scale = Math.min(1, maxDim / Math.max(w, h));
+        const targetW = Math.max(1, Math.round(w * scale));
+        const targetH = Math.max(1, Math.round(h * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(sourceDataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        resolve(canvas.toDataURL('image/jpeg', 0.78));
+      } catch {
+        resolve(sourceDataUrl);
+      }
+    };
+    img.onerror = () => resolve(sourceDataUrl);
+    img.src = sourceDataUrl;
+  });
+}
+
+/**
+ * Servicio de identificación de especies asistida por IA.
  * - Nunca expone claves de API en el cliente.
  * - Para fotos reales (`presetScenario === 'auto'` o indefinido), llama al backend seguro `/api/identify-bird`
  *   con Google Gemini Vision + referencias reales de iNaturalist.
@@ -243,21 +290,37 @@ export async function identifyBirdFromPhoto(
     return demoResponse;
   }
 
-  // 2. Identificación real mediante backend seguro (/api/identify-bird -> Google Gemini Vision)
+  // 2. Identificación real mediante backend seguro (/api/identify-bird -> Gemini 3.x + respaldos)
   if (!isTestEnvironment()) {
     try {
-      const res = await fetch(`${getApiBase()}/api/identify-bird`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sanitizedPhotoDataUrl: req.sanitizedPhotoDataUrl,
-          generalLocationHint: req.generalLocationHint,
-          observedAtIso: req.observedAtIso,
-          fileName: req.fileName,
-          photoSha256: req.photoSha256,
-        }),
-      });
+      const compactVisionDataUrl = await createCompactVisionDataUrl(req.sanitizedPhotoDataUrl, 896);
+      const postIdentify = () =>
+        fetch(`${getApiBase()}/api/identify-bird`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sanitizedPhotoDataUrl: compactVisionDataUrl,
+            generalLocationHint: req.generalLocationHint,
+            observedAtIso: req.observedAtIso,
+            fileName: req.fileName,
+            photoSha256: req.photoSha256,
+          }),
+        });
+
+      let res = await postIdentify();
+
+      // Reintento silencioso automático tras 1.6s si Google tuvo un pico momentáneo 503
+      if (res.status === 503) {
+        const peek = (await res
+          .clone()
+          .json()
+          .catch(() => ({}))) as { error?: string };
+        if (peek.error === 'GEMINI_HIGH_DEMAND') {
+          await new Promise((r) => setTimeout(r, 1600));
+          res = await postIdentify();
+        }
+      }
 
       if (res.ok) {
         const raw = (await res.json()) as IdentificationResponse;
@@ -305,7 +368,7 @@ export async function identifyBirdFromPhoto(
         };
       }
 
-      if (res.status === 503 && errPayload.error === 'AUTH_NOT_CONFIGURED') {
+      if (errPayload.error === 'AUTH_NOT_CONFIGURED') {
         return {
           status: 'error_procesamiento',
           confidenceLevel: 'insuficiente',
@@ -323,7 +386,7 @@ export async function identifyBirdFromPhoto(
         };
       }
 
-      if (res.status === 503 || errPayload.error === 'GEMINI_API_KEY_MISSING') {
+      if (errPayload.error === 'GEMINI_API_KEY_MISSING') {
         return {
           status: 'pendiente_identificacion',
           confidenceLevel: 'insuficiente',
@@ -339,6 +402,24 @@ export async function identifyBirdFromPhoto(
         };
       }
 
+      if (errPayload.error === 'GEMINI_HIGH_DEMAND') {
+        return {
+          status: 'error_procesamiento',
+          confidenceLevel: 'insuficiente',
+          proposedTaxonId: null,
+          candidates: [],
+          explanation:
+            errPayload.message ||
+            'Los servidores gratuitos de Google Gemini están con alta demanda en este momento.',
+          uncertaintyReason:
+            'Tocá «Reintentar análisis con IA» en unos segundos (o agregá GROQ_API_KEY gratis en Render como respaldo instantáneo para evitar picos de demanda).',
+          fromCache: false,
+          taxonomicSource: 'Google Gemini (pico temporal de demanda)',
+          aiMode: 'error',
+          aiErrorMessage: errPayload.detail || 'GEMINI_HIGH_DEMAND',
+        };
+      }
+
       return {
         status: 'error_procesamiento',
         confidenceLevel: 'insuficiente',
@@ -346,11 +427,11 @@ export async function identifyBirdFromPhoto(
         candidates: [],
         explanation:
           errPayload.message ||
-          'No pudimos completar el análisis de tu fotografía con Google Gemini en este momento.',
+          'No pudimos completar el análisis de tu fotografía con la IA en este momento.',
         uncertaintyReason:
           'Podés reintentar el análisis, elegir la especie manualmente comparando con fotos de referencia, o guardarla como «Pendiente de identificar».',
         fromCache: false,
-        taxonomicSource: 'Google Gemini (reintento disponible)',
+        taxonomicSource: 'Motor de visión (reintento disponible)',
         aiMode: 'error',
         aiErrorMessage: errPayload.detail || errPayload.message,
       };
