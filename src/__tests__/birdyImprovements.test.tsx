@@ -10,7 +10,10 @@ import {
   inferOrganismGroupFromMeta,
   searchSpeciesCatalog,
 } from '../data/argentinaBirdsCatalog';
-import { ORGANISM_GROUPS_ORDER } from '../types/domain';
+import {
+  ILLUSTRATION_STYLES_ORDER,
+  ORGANISM_GROUPS_ORDER,
+} from '../types/domain';
 import { identifyBirdFromPhoto } from '../services/aiBirdService';
 import {
   exportFullBackupJson,
@@ -371,5 +374,24 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
     });
     expect(beePrompt).toContain('entomological');
     expect(beePrompt).toContain('pollinator');
+
+    // Orden de prioridad de estilos: 1) Muralismo (por defecto), 2) Acuarela, 3) Grafito
+    expect(ILLUSTRATION_STYLES_ORDER).toEqual([
+      'muralismo_fauna',
+      'acuarela_naturalista',
+      'lapiz_grafito',
+    ]);
+
+    const muralPrompt = buildNaturalistIllustrationPrompt({
+      commonNameAr: 'Mariposa monarca del sur',
+      scientificName: 'Danaus erippus',
+      identificationTraits: 'Alas anaranjadas con venas negras y puntitos blancos',
+      style: 'muralismo_fauna',
+      organismGroup: 'mariposas',
+    });
+    expect(muralPrompt).toContain('muralism');
+    expect(muralPrompt).toContain('Danaus erippus');
+    expect(muralPrompt).toContain('NO text');
+    expect(muralPrompt).toContain('NO graffiti tags');
   });
 });

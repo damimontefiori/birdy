@@ -20,6 +20,7 @@ import {
   searchINaturalistBirds,
   serverFetch,
   type ServerEnv,
+  type ServerIllustrationStyle,
   type ServerOrganismGroup,
 } from './secureAiProxy.ts';
 
@@ -367,7 +368,7 @@ export async function handleBirdyApiRequest(
         commonNameAr?: string;
         scientificName?: string;
         identificationTraits?: string;
-        style?: 'acuarela_naturalista' | 'lapiz_grafito';
+        style?: ServerIllustrationStyle;
         organismGroup?: ServerOrganismGroup;
         version?: number;
       }>(req);
@@ -377,12 +378,19 @@ export async function handleBirdyApiRequest(
         return true;
       }
 
+      const resolvedStyle: ServerIllustrationStyle =
+        body.style === 'lapiz_grafito'
+          ? 'lapiz_grafito'
+          : body.style === 'acuarela_naturalista'
+            ? 'acuarela_naturalista'
+            : 'muralismo_fauna';
+
       const generated = await generateNaturalistPlateWithGemini(
         {
           commonNameAr: body.commonNameAr,
           scientificName: body.scientificName,
           identificationTraits: body.identificationTraits || body.commonNameAr,
-          style: body.style === 'lapiz_grafito' ? 'lapiz_grafito' : 'acuarela_naturalista',
+          style: resolvedStyle,
           organismGroup: inferServerOrganismGroup({
             organismGroup: body.organismGroup,
             scientificName: body.scientificName,

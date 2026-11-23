@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { fetchPublicNotebookByToken } from '../services/storageAndSyncService';
 import {
+  ILLUSTRATION_STYLE_META,
   ORGANISM_GROUP_META,
   ORGANISM_GROUPS_ORDER,
   OrganismGroup,
@@ -97,9 +98,7 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
         title: sheet.commonNameAr,
         subtitle: sheet.scientificName,
         badge:
-          sheet.illustrationStyle === 'acuarela_naturalista'
-            ? 'Lámina en acuarela'
-            : 'Apunte en grafito',
+          ILLUSTRATION_STYLE_META[sheet.illustrationStyle]?.plateLabel || 'Mural de naturaleza',
       },
       ...sheet.publicPhotos.map((url, idx) => ({
         url,
@@ -146,7 +145,7 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
         <section className={`notebook-page style-${notebook.style}`}>
           <span className="badge badge-sync-respaldado" style={{ marginBottom: 8 }}>
             <Sparkles size={13} />{' '}
-            {notebook.style === 'acuarela_naturalista' ? 'Acuarela naturalista' : 'Lápiz grafito'}
+            {ILLUSTRATION_STYLE_META[notebook.style]?.label || 'Muralismo de fauna autóctona'}
           </span>
           <h2 className="serif-heading" style={{ fontSize: '1.9rem', margin: '2px 0 6px' }}>
             {notebook.title}

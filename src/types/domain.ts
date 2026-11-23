@@ -1,4 +1,49 @@
-export type IllustrationStyle = 'acuarela_naturalista' | 'lapiz_grafito';
+export type IllustrationStyle =
+  | 'muralismo_fauna'
+  | 'acuarela_naturalista'
+  | 'lapiz_grafito';
+
+export interface IllustrationStyleMeta {
+  id: IllustrationStyle;
+  label: string;
+  shortLabel: string;
+  plateLabel: string;
+  description: string;
+  cardHeaderTag: string;
+}
+
+export const ILLUSTRATION_STYLES_ORDER: IllustrationStyle[] = [
+  'muralismo_fauna',
+  'acuarela_naturalista',
+  'lapiz_grafito',
+];
+
+export const ILLUSTRATION_STYLE_META: Record<IllustrationStyle, IllustrationStyleMeta> = {
+  muralismo_fauna: {
+    id: 'muralismo_fauna',
+    label: 'Muralismo de fauna autóctona',
+    shortLabel: 'Muralismo',
+    plateLabel: 'Mural de naturaleza',
+    description: 'Color vibrante, pincelada mural y flora nativa sobre muro cálido.',
+    cardHeaderTag: 'MURALISMO DE NATURALEZA',
+  },
+  acuarela_naturalista: {
+    id: 'acuarela_naturalista',
+    label: 'Acuarela naturalista',
+    shortLabel: 'Acuarela',
+    plateLabel: 'Lámina en acuarela',
+    description: 'Veladuras cálidas y tinta sepia sobre papel algodón.',
+    cardHeaderTag: 'ACUARELA NATURALISTA',
+  },
+  lapiz_grafito: {
+    id: 'lapiz_grafito',
+    label: 'Lápiz grafito',
+    shortLabel: 'Grafito',
+    plateLabel: 'Apunte en grafito',
+    description: 'Apunte de campo clásico a lápiz 2B/4B.',
+    cardHeaderTag: 'APUNTE EN LÁPIZ GRAFITO',
+  },
+};
 
 export type NotebookType = 'jardin' | 'viaje';
 
@@ -150,6 +195,7 @@ export interface SpeciesCatalogEntry {
   dietAndHabitat: string;
   generalDistribution: string;
   typicalRegionsAr: string[];
+  defaultMuralPlate?: string;
   defaultWatercolorPlate?: string;
   defaultGraphitePlate?: string;
   referencePhotos?: SpeciesReferencePhoto[];

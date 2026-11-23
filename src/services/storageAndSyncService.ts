@@ -477,9 +477,11 @@ export function publishOrUpdateSanitizedNotebookProjection(
       const ill = allIllustrations.find((i) => i.id === sh.activeIllustrationId);
       const illustrationUrl =
         ill?.imageUrl ||
-        (notebook.style === 'acuarela_naturalista'
-          ? species.defaultWatercolorPlate
-          : species.defaultGraphitePlate) ||
+        (notebook.style === 'muralismo_fauna'
+          ? species.defaultMuralPlate || species.defaultWatercolorPlate
+          : notebook.style === 'acuarela_naturalista'
+            ? species.defaultWatercolorPlate
+            : species.defaultGraphitePlate) ||
         species.referencePhotos?.[0]?.url ||
         '/plates/acuarela_hornero.jpg';
 

@@ -45,6 +45,7 @@ const RAW_ARGENTINA_BIRDS_CATALOG: SpeciesCatalogEntry[] = [
     generalDistribution:
       'Ave Nacional de la Argentina. Muy común en el centro, norte y litoral, en expansión hacia la Patagonia norte.',
     typicalRegionsAr: ['Buenos Aires', 'Córdoba', 'Santa Fe', 'Entre Ríos', 'Misiones', 'Corrientes', 'La Pampa'],
+    defaultMuralPlate: '/plates/mural_hornero.jpg',
     defaultWatercolorPlate: '/plates/acuarela_hornero.jpg',
     defaultGraphitePlate: '/plates/grafito_hornero.jpg',
   },

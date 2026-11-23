@@ -1256,7 +1256,27 @@ select,
   border-left-color: var(--terracotta);
 }
 
-/* Selector de estilo artístico */
+/* Selector de estilo artístico (3 artes: Muralismo por defecto, Acuarela y Grafito) */
+.welcome-triptych {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 14px 0 18px;
+}
+
+.welcome-art-sample {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+.welcome-art-sample span {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ink-secondary);
+}
+
 .style-selector-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1273,9 +1293,56 @@ select,
   transition: border-color 140ms ease, background-color 140ms ease;
 }
 
+.style-option-card.featured {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.style-option-card.featured .style-featured-thumb {
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
+  margin-bottom: 0;
+}
+
+.style-option-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+@media (min-width: 640px) {
+  .style-selector-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .style-option-card.featured {
+    grid-column: auto;
+    display: block;
+  }
+
+  .style-option-card.featured .style-featured-thumb {
+    width: 100%;
+    height: auto;
+    margin-bottom: 8px;
+  }
+}
+
 .style-option-card.selected {
   border-color: var(--botanical-green);
   background: var(--botanical-sage-soft);
+}
+
+.notebook-page.style-muralismo_fauna,
+.notebook-card.style-muralismo_fauna {
+  border-left-color: #1F5A54;
+}
+
+.plate-frame.style-muralismo_fauna,
+.hero-stage-card.style-muralismo_fauna {
+  background: #EFE7D8;
+  border-color: rgba(31, 90, 84, 0.28);
 }
 
 /* ============================================================================

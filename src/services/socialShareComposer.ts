@@ -1,4 +1,5 @@
 import {
+  ILLUSTRATION_STYLE_META,
   IllustrationStyle,
   ORGANISM_GROUP_META,
   OrganismGroup,
@@ -94,11 +95,14 @@ export async function composeSocialShareCard(
     };
   }
 
+  const isMural = options.style === 'muralismo_fauna';
   const isWatercolor = options.style === 'acuarela_naturalista';
-  const accentColor = isWatercolor ? '#38573E' : '#4A463F';
-  const paperBg = isWatercolor ? '#F6F1E4' : '#F3F0E8';
-  const insetBg = isWatercolor ? '#ECE4D0' : '#E9E5DC';
-  const borderSoft = isWatercolor ? '#CFC2AA' : '#BEB7AA';
+  const isGraphite = options.style === 'lapiz_grafito';
+  const styleMeta = ILLUSTRATION_STYLE_META[options.style] || ILLUSTRATION_STYLE_META.muralismo_fauna;
+  const accentColor = isMural ? '#1F5A54' : isWatercolor ? '#38573E' : '#4A463F';
+  const paperBg = isMural ? '#F2EBDC' : isWatercolor ? '#F6F1E4' : '#F3F0E8';
+  const insetBg = isMural ? '#E9E0CC' : isWatercolor ? '#ECE4D0' : '#E9E5DC';
+  const borderSoft = isMural ? '#C4B395' : isWatercolor ? '#CFC2AA' : '#BEB7AA';
 
   // 1. Papel botánico artesanal + textura cálida
   ctx.fillStyle = paperBg;
@@ -127,9 +131,7 @@ export async function composeSocialShareCard(
   ctx.textAlign = 'center';
   const groupHeaderLabel = groupMeta ? groupMeta.label.toUpperCase() : 'CUADERNO VIVO';
   ctx.fillText(
-    isWatercolor
-      ? `✦   BIOMA · ${groupHeaderLabel} · ACUARELA NATURALISTA   ✦`
-      : `✦   BIOMA · ${groupHeaderLabel} · APUNTE EN LÁPIZ GRAFITO   ✦`,
+    `✦   BIOMA · ${groupHeaderLabel} · ${styleMeta.cardHeaderTag}   ✦`,
     width / 2,
     isStory ? 96 : 82
   );
@@ -176,7 +178,7 @@ export async function composeSocialShareCard(
       const artY = 124;
       const artW = 924;
       const artH = 924;
-      drawMattedArtwork(ctx, illustrationImg, artX, artY, artW, artH, isWatercolor);
+      drawMattedArtwork(ctx, illustrationImg, artX, artY, artW, artH, isGraphite);
 
       // Bloque editorial de nombre
       ctx.textAlign = 'center';
@@ -260,7 +262,7 @@ export async function composeSocialShareCard(
       const artY = 124;
       const artW = 936;
       const artH = 1100;
-      drawMattedArtwork(ctx, illustrationImg, artX, artY, artW, artH, isWatercolor);
+      drawMattedArtwork(ctx, illustrationImg, artX, artY, artW, artH, isGraphite);
 
       // Bloque editorial de título
       ctx.textAlign = 'center';
@@ -328,7 +330,7 @@ export async function composeSocialShareCard(
       const topY = 106;
       const diptychH = 716;
       const leftW = 588;
-      drawMattedArtwork(ctx, illustrationImg, 66, topY, leftW, diptychH, isWatercolor);
+      drawMattedArtwork(ctx, illustrationImg, 66, topY, leftW, diptychH, isGraphite);
 
       const rightX = 678;
       const rightW = 336;
@@ -411,7 +413,7 @@ export async function composeSocialShareCard(
       }
     } else {
       // SOLO ILUSTRACIÓN en 4:5: Gran lámina (948 × 764) + Título + Ficha compacta
-      drawMattedArtwork(ctx, illustrationImg, 66, 106, 948, 764, isWatercolor);
+      drawMattedArtwork(ctx, illustrationImg, 66, 106, 948, 764, isGraphite);
 
       ctx.textAlign = 'center';
       ctx.fillStyle = '#241F1B';
@@ -518,7 +520,7 @@ function drawMattedArtwork(
   y: number,
   w: number,
   h: number,
-  isWatercolor: boolean
+  isGraphite: boolean
 ): void {
   // Sombra suave del paspartú
   ctx.save();
@@ -533,7 +535,7 @@ function drawMattedArtwork(
   ctx.strokeRect(x - 10, y - 10, w + 20, h + 20);
 
   if (img) {
-    if (!isWatercolor) {
+    if (isGraphite) {
       ctx.filter = 'grayscale(0.88) contrast(1.06) sepia(0.12)';
     }
     drawImageCover(ctx, img, x, y, w, h);

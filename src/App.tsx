@@ -95,6 +95,7 @@ import {
 import {
   AICandidate,
   ExifSuggestions,
+  ILLUSTRATION_STYLE_META,
   IdentificationStatus,
   IllustrationStyle,
   Notebook,
@@ -220,10 +221,10 @@ export const App: React.FC = () => {
     label: string;
   } | null>(null);
 
-  // Formulario de creación/edición de cuaderno
+  // Formulario de creación/edición de cuaderno (Muralismo de fauna autóctona por defecto)
   const [nbTitle, setNbTitle] = useState<string>('Vida de mi jardín');
   const [nbType, setNbType] = useState<NotebookType>('jardin');
-  const [nbStyle, setNbStyle] = useState<IllustrationStyle>('acuarela_naturalista');
+  const [nbStyle, setNbStyle] = useState<IllustrationStyle>('muralismo_fauna');
   const [nbLocation, setNbLocation] = useState<string>('Tigre, Buenos Aires');
   const [nbPeriod, setNbPeriod] = useState<string>('Primavera 2026');
   const [nbDescription, setNbDescription] = useState<string>(
@@ -607,7 +608,7 @@ export const App: React.FC = () => {
     if (persisted.notebooks.length === 0) {
       setNbTitle('Vida de mi jardín');
       setNbType('jardin');
-      setNbStyle('acuarela_naturalista');
+      setNbStyle('muralismo_fauna');
       setNbLocation('Tigre, Buenos Aires');
       setNbPeriod('Primavera 2026');
       setNbDescription('Mariposas, aves, abejas, insectos y pequeños vecinos que visitan el jardín.');
@@ -814,7 +815,7 @@ export const App: React.FC = () => {
     if (nextState.notebooks.length === 0) {
       setNbTitle('Vida de mi jardín');
       setNbType('jardin');
-      setNbStyle('acuarela_naturalista');
+      setNbStyle('muralismo_fauna');
       setNbLocation('Tigre, Buenos Aires');
       setNbPeriod('Primavera 2026');
       setNbDescription('Mariposas, aves, abejas, insectos y pequeños vecinos que visitan el jardín.');
@@ -865,9 +866,7 @@ export const App: React.FC = () => {
     setNotebookGroupFilter('todos');
     setScreen('notebook_detail');
     showToast(
-      `Cuaderno «${newNotebook.title}» creado (${
-        nbStyle === 'acuarela_naturalista' ? 'Acuarela naturalista' : 'Lápiz grafito'
-      }).`
+      `Cuaderno «${newNotebook.title}» creado (${ILLUSTRATION_STYLE_META[nbStyle].label}).`
     );
   };
 
@@ -1646,6 +1645,9 @@ export const App: React.FC = () => {
       return ill.imageUrl;
     }
     const sp = findSpeciesByTaxonId(sheet.taxonId);
+    if (style === 'muralismo_fauna' && sp?.defaultMuralPlate) {
+      return sp.defaultMuralPlate;
+    }
     if (style === 'acuarela_naturalista' && sp?.defaultWatercolorPlate) {
       return sp.defaultWatercolorPlate;
     }
@@ -1755,26 +1757,32 @@ export const App: React.FC = () => {
             })}
           </div>
 
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 10,
-              margin: '14px 0 18px',
-            }}
-          >
-            <div className="plate-frame">
-              <img src="/plates/acuarela_hornero.jpg" alt="Ejemplo de lámina en acuarela naturalista" />
+          <div className="welcome-triptych">
+            <div className="welcome-art-sample">
+              <div className="plate-frame style-muralismo_fauna">
+                <img src="/plates/mural_hornero.jpg" alt="Ejemplo de muralismo de fauna autóctona" />
+              </div>
+              <span>Muralismo</span>
             </div>
-            <div className="plate-frame style-lapiz_grafito">
-              <img src="/plates/grafito_chingolo.jpg" alt="Ejemplo de lámina en lápiz grafito" />
+            <div className="welcome-art-sample">
+              <div className="plate-frame">
+                <img src="/plates/acuarela_hornero.jpg" alt="Ejemplo de lámina en acuarela naturalista" />
+              </div>
+              <span>Acuarela</span>
+            </div>
+            <div className="welcome-art-sample">
+              <div className="plate-frame style-lapiz_grafito">
+                <img src="/plates/grafito_chingolo.jpg" alt="Ejemplo de lámina en lápiz grafito" />
+              </div>
+              <span>Grafito</span>
             </div>
           </div>
 
           <p style={{ color: 'var(--ink-secondary)', fontSize: '0.94rem', marginBottom: 18 }}>
             Descubrí qué ave, mariposa, abeja, abejorro, insecto o vecino del jardín fotografiaste,
-            conocé su rol ecológico y convertí cada encuentro en una lámina en{' '}
-            <strong>acuarela</strong> o <strong>lápiz grafito</strong>.
+            conocé su rol ecológico y convertí cada encuentro en una obra de{' '}
+            <strong>muralismo de fauna autóctona</strong>, <strong>acuarela</strong> o{' '}
+            <strong>lápiz grafito</strong>.
           </p>
 
           {authErrorMessage && (
@@ -1995,8 +2003,32 @@ export const App: React.FC = () => {
             </div>
 
             <div className="field-group">
-              <label>Estilo de las láminas (fijo para este cuaderno)</label>
+              <label>Estilo artístico de las láminas (fijo para este cuaderno)</label>
               <div className="style-selector-grid">
+                <button
+                  type="button"
+                  className={`style-option-card featured ${nbStyle === 'muralismo_fauna' ? 'selected' : ''}`}
+                  onClick={() => setNbStyle('muralismo_fauna')}
+                >
+                  <div className="plate-frame style-muralismo_fauna style-featured-thumb">
+                    <img
+                      src="/plates/mural_hornero.jpg"
+                      alt="Muestra Muralismo de fauna autóctona"
+                    />
+                  </div>
+                  <div className="style-option-copy">
+                    <span className="badge badge-sync-respaldado" style={{ marginBottom: 4 }}>
+                      Por defecto
+                    </span>
+                    <div style={{ fontWeight: 700, fontSize: '0.94rem' }}>
+                      Muralismo de fauna autóctona
+                    </div>
+                    <div className="field-hint">
+                      Muralismo de naturaleza y biodiversidad con color vibrante y flora nativa.
+                    </div>
+                  </div>
+                </button>
+
                 <button
                   type="button"
                   className={`style-option-card ${nbStyle === 'acuarela_naturalista' ? 'selected' : ''}`}
@@ -2006,7 +2038,7 @@ export const App: React.FC = () => {
                     <img src="/plates/acuarela_hornero.jpg" alt="Muestra Acuarela Naturalista" />
                   </div>
                   <div style={{ fontWeight: 700, fontSize: '0.94rem' }}>Acuarela naturalista</div>
-                  <div className="field-hint">Tonos cálidos sobre papel algodón.</div>
+                  <div className="field-hint">Veladuras cálidas sobre papel algodón.</div>
                 </button>
 
                 <button
@@ -2136,7 +2168,7 @@ export const App: React.FC = () => {
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, marginBottom: 6 }}>
                       <span className="badge badge-sync-respaldado">
                         {nb.type === 'jardin' ? 'Jardín' : 'Viaje'} ·{' '}
-                        {nb.style === 'acuarela_naturalista' ? 'Acuarela' : 'Grafito'}
+                        {ILLUSTRATION_STYLE_META[nb.style]?.shortLabel || 'Muralismo'}
                       </span>
                       {renderSyncBadge(nb.syncStatus)}
                     </div>
@@ -2340,9 +2372,8 @@ export const App: React.FC = () => {
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
                   <span className="badge badge-sync-respaldado">
                     Estilo fijo:{' '}
-                    {activeNotebook.style === 'acuarela_naturalista'
-                      ? 'Acuarela naturalista'
-                      : 'Lápiz grafito'}
+                    {ILLUSTRATION_STYLE_META[activeNotebook.style]?.label ||
+                      'Muralismo de fauna autóctona'}
                   </span>
                   {renderSyncBadge(activeNotebook.syncStatus)}
                 </div>
@@ -3327,9 +3358,8 @@ export const App: React.FC = () => {
                 url: illustrationUrl,
                 title: species.commonNameAr,
                 subtitle: `${species.scientificName} · ${
-                  activeNotebook.style === 'acuarela_naturalista'
-                    ? 'Lámina en acuarela'
-                    : 'Apunte en grafito'
+                  ILLUSTRATION_STYLE_META[activeNotebook.style]?.plateLabel ||
+                  'Mural de naturaleza'
                 }`,
                 badge: 'Ilustración',
               },
@@ -3470,7 +3500,7 @@ export const App: React.FC = () => {
                       >
                         <img src={illustrationUrl} alt={`Ilustración de ${species.commonNameAr}`} />
                         <span className="hero-corner-tag">
-                          {activeNotebook.style === 'acuarela_naturalista' ? 'Acuarela' : 'Grafito'}
+                          {ILLUSTRATION_STYLE_META[activeNotebook.style]?.shortLabel || 'Muralismo'}
                         </span>
                         <span className="zoom-pill">
                           <ZoomIn size={12} /> Ampliar
@@ -3921,13 +3951,13 @@ export const App: React.FC = () => {
                 <p style={{ margin: '4px 0 0', fontSize: '0.8rem' }}>
                   {aiHealth.imageFallbackProviders && aiHealth.imageFallbackProviders.length > 0 ? (
                     <>
-                      Acuarelas IA: <strong>Gemini + {aiHealth.imageFallbackProviders.join(' / ')}</strong>{' '}
+                      Ilustraciones IA: <strong>Gemini + {aiHealth.imageFallbackProviders.join(' / ')}</strong>{' '}
                       activos.
                     </>
                   ) : (
                     <>
-                      Acuarelas: <strong>Gemini</strong> (requiere cuota de imagen) con respaldo
-                      automático de <strong>acuarela botánica local</strong>. Para pintura 100%
+                      Ilustraciones (Muralismo, Acuarela y Grafito): <strong>Gemini</strong> (requiere cuota de imagen) con respaldo
+                      automático de <strong>estudio artístico local</strong>. Para generación 100%
                       IA sin tarjeta, podés agregar <code>HUGGINGFACE_API_KEY</code> en el
                       servidor.
                     </>

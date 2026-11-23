@@ -664,18 +664,22 @@ export async function generateOrReuseIllustration(params: {
   const nextVersion = matching.length > 0 ? matching[0].version + 1 : 1;
 
   const dedicatedStaticPlate =
-    style === 'acuarela_naturalista'
-      ? species.defaultWatercolorPlate
-      : species.defaultGraphitePlate;
+    style === 'muralismo_fauna'
+      ? species.defaultMuralPlate
+      : style === 'acuarela_naturalista'
+        ? species.defaultWatercolorPlate
+        : species.defaultGraphitePlate;
 
   let finalImageUrl = '';
   let modelProvider = 'Estudio Naturalista';
   let variationNote =
     nextVersion === 1
-      ? style === 'acuarela_naturalista'
-        ? 'Lámina en acuarela botánica sobre papel algodón'
-        : 'Apunte de campo en lápiz grafito 2B/4B'
-      : `Versión #${nextVersion} — Pose alternativa de estudio naturalista`;
+      ? style === 'muralismo_fauna'
+        ? 'Mural de fauna autóctona y biodiversidad sobre muro mineral cálido'
+        : style === 'acuarela_naturalista'
+          ? 'Lámina en acuarela botánica sobre papel algodón'
+          : 'Apunte de campo en lápiz grafito 2B/4B'
+      : `Versión #${nextVersion} — Variación artística naturalista`;
 
   // 1. Si no tiene lámina dedicada O se pidió nueva versión, intentar generación real por IA en el servidor
   let geminiImageQuotaExceeded = false;
@@ -764,19 +768,27 @@ export async function generateOrReuseIllustration(params: {
       }
 
       modelProvider = geminiImageQuotaExceeded
-        ? style === 'acuarela_naturalista'
-          ? 'Acuarela botánica local (Gemini sin cuota de imagen)'
-          : 'Grafito botánico local (Gemini sin cuota de imagen)'
-        : style === 'acuarela_naturalista'
-          ? 'Acuarela botánica local'
-          : 'Apunte en grafito local';
+        ? style === 'muralismo_fauna'
+          ? 'Muralismo botánico local (Gemini sin cuota de imagen)'
+          : style === 'acuarela_naturalista'
+            ? 'Acuarela botánica local (Gemini sin cuota de imagen)'
+            : 'Grafito botánico local (Gemini sin cuota de imagen)'
+        : style === 'muralismo_fauna'
+          ? 'Muralismo de fauna autóctona local'
+          : style === 'acuarela_naturalista'
+            ? 'Acuarela botánica local'
+            : 'Apunte en grafito local';
       variationNote = geminiImageQuotaExceeded
-        ? style === 'acuarela_naturalista'
-          ? 'Acuarela botánica local (agregá HUGGINGFACE_API_KEY gratis o facturación en Gemini para pintura 100% IA)'
-          : 'Grafito botánico local (agregá HUGGINGFACE_API_KEY gratis o facturación en Gemini para dibujo 100% IA)'
-        : style === 'acuarela_naturalista'
-          ? 'Lámina en acuarela botánica sobre papel algodón'
-          : 'Apunte de campo en lápiz grafito 2B/4B';
+        ? style === 'muralismo_fauna'
+          ? 'Muralismo de fauna local (agregá HUGGINGFACE_API_KEY gratis o facturación en Gemini para mural 100% IA)'
+          : style === 'acuarela_naturalista'
+            ? 'Acuarela botánica local (agregá HUGGINGFACE_API_KEY gratis o facturación en Gemini para pintura 100% IA)'
+            : 'Grafito botánico local (agregá HUGGINGFACE_API_KEY gratis o facturación en Gemini para dibujo 100% IA)'
+        : style === 'muralismo_fauna'
+          ? 'Mural de fauna autóctona y biodiversidad sobre muro cálido'
+          : style === 'acuarela_naturalista'
+            ? 'Lámina en acuarela botánica sobre papel algodón'
+            : 'Apunte de campo en lápiz grafito 2B/4B';
     } else if (fallbackPhotoDataUrl) {
       finalImageUrl = await createArtisticPlateDataUrl(
         fallbackPhotoDataUrl,
@@ -786,9 +798,11 @@ export async function generateOrReuseIllustration(params: {
         false
       );
       modelProvider =
-        style === 'acuarela_naturalista'
-          ? 'Acuarela botánica desde fotografía'
-          : 'Apunte en grafito desde fotografía';
+        style === 'muralismo_fauna'
+          ? 'Muralismo de fauna desde fotografía'
+          : style === 'acuarela_naturalista'
+            ? 'Acuarela botánica desde fotografía'
+            : 'Apunte en grafito desde fotografía';
     } else {
       finalImageUrl = createFallbackBotanicalMonogramPlate(species, style);
       modelProvider = 'Lámina tipográfica de campo';
@@ -804,9 +818,11 @@ export async function generateOrReuseIllustration(params: {
     imageUrl: finalImageUrl,
     version: nextVersion,
     promptSummary:
-      style === 'acuarela_naturalista'
-        ? `Ilustración naturalista en acuarela botánica de ${species.commonNameAr} (${species.scientificName}), sin texto embebido.`
-        : `Apunte de campo en lápiz grafito de ${species.commonNameAr} (${species.scientificName}), sin texto embebido.`,
+      style === 'muralismo_fauna'
+        ? `Muralismo de fauna autóctona y biodiversidad de ${species.commonNameAr} (${species.scientificName}), sin texto embebido.`
+        : style === 'acuarela_naturalista'
+          ? `Ilustración naturalista en acuarela botánica de ${species.commonNameAr} (${species.scientificName}), sin texto embebido.`
+          : `Apunte de campo en lápiz grafito de ${species.commonNameAr} (${species.scientificName}), sin texto embebido.`,
     modelProvider,
     variationNote,
     createdAt: new Date().toISOString(),
@@ -859,7 +875,12 @@ async function createArtisticPlateDataUrl(
             return;
           }
 
-          ctx.fillStyle = style === 'acuarela_naturalista' ? '#FAF5E8' : '#F6F2E8';
+          ctx.fillStyle =
+            style === 'muralismo_fauna'
+              ? '#EFE7D8'
+              : style === 'acuarela_naturalista'
+                ? '#FAF5E8'
+                : '#F6F2E8';
           ctx.fillRect(0, 0, size, size);
 
           const imgRatio = (img.width || size) / (img.height || size);
@@ -914,8 +935,18 @@ function createFallbackBotanicalMonogramPlate(
   species: SpeciesCatalogEntry,
   style: IllustrationStyle
 ): string {
-  const bg = style === 'acuarela_naturalista' ? '#F6F0E2' : '#F3EFE6';
-  const stroke = style === 'acuarela_naturalista' ? '#38573E' : '#4D4840';
+  const bg =
+    style === 'muralismo_fauna'
+      ? '#EFE7D8'
+      : style === 'acuarela_naturalista'
+        ? '#F6F0E2'
+        : '#F3EFE6';
+  const stroke =
+    style === 'muralismo_fauna'
+      ? '#1F5A54'
+      : style === 'acuarela_naturalista'
+        ? '#38573E'
+        : '#4D4840';
   const emblem = ORGANISM_GROUP_META[getSpeciesGroup(species)].emoji;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
     <rect width="800" height="800" fill="${bg}"/>

@@ -294,11 +294,16 @@ export function inferServerOrganismGroup(meta: {
   return 'aves';
 }
 
+export type ServerIllustrationStyle =
+  | 'muralismo_fauna'
+  | 'acuarela_naturalista'
+  | 'lapiz_grafito';
+
 export function buildNaturalistIllustrationPrompt(params: {
   commonNameAr: string;
   scientificName: string;
   identificationTraits: string;
-  style: 'acuarela_naturalista' | 'lapiz_grafito';
+  style: ServerIllustrationStyle;
   organismGroup?: ServerOrganismGroup;
   version?: number;
 }): string {
@@ -351,6 +356,17 @@ export function buildNaturalistIllustrationPrompt(params: {
         : 'Calm side-profile naturalist study nestled beside a delicate leafy garden twig.'
       : 'Calm natural side-profile study resting on a small mossy stone or delicate leafy garden twig.';
     detailPhrase = 'authentic zoological brushwork, subtle natural texture, and fine sepia ink contours';
+  }
+
+  if (params.style === 'muralismo_fauna') {
+    return [
+      `Contemporary South American native wildlife and biodiversity muralism painting of ${params.scientificName} (${params.commonNameAr}, ${taxonContext}).`,
+      `Strict anatomical and color accuracy: ${params.identificationTraits}.`,
+      poseHint,
+      `Expressive large-scale acrylic and fine mural brushwork painted on a subtly textured warm mineral lime-plaster wall (#EFE7D8), framed with stylized native South American botanical foliage, warm sunlit ochre solar halo, deep teal-forest shadows, terracotta and emerald natural pigments.`,
+      `Bold graphic painterly planes, crisp expressive dark-charcoal contours, luminous gallery-quality Argentine nature muralism aesthetic — NO raw photograph, NO camera bokeh, NO brick grid.`,
+      `Square 1:1 composition with balanced margins. Strictly NO text, NO typography, NO graffiti tags, NO Latin names, NO labels, NO frames, NO signatures, NO watermarks.`,
+    ].join(' ');
   }
 
   if (params.style === 'acuarela_naturalista') {
@@ -891,12 +907,29 @@ export async function identifyBirdWithGemini(
  * 2. Cloudflare Workers AI — FLUX.1-schnell (capa gratuita diaria sin tarjeta, si se configuró).
  * 3. Hugging Face Inference — FLUX.1-schnell (token gratuito sin tarjeta, si se configuró).
  */
+function buildStyleVariationNote(
+  style: ServerIllustrationStyle,
+  version: number | undefined,
+  providerLabel: string
+): string {
+  if ((version || 1) > 1) {
+    return `Versión #${version} — Obra original generada con ${providerLabel}`;
+  }
+  if (style === 'muralismo_fauna') {
+    return 'Mural de fauna autóctona y biodiversidad sobre muro mineral cálido';
+  }
+  if (style === 'acuarela_naturalista') {
+    return 'Lámina original en acuarela botánica sobre papel algodón';
+  }
+  return 'Apunte de campo original en lápiz grafito 2B/4B';
+}
+
 export async function generateNaturalistPlateWithGemini(
   params: {
     commonNameAr: string;
     scientificName: string;
     identificationTraits: string;
-    style: 'acuarela_naturalista' | 'lapiz_grafito';
+    style: ServerIllustrationStyle;
     organismGroup?: ServerOrganismGroup;
     version?: number;
   },
@@ -976,12 +1009,7 @@ export async function generateNaturalistPlateWithGemini(
             return {
               imageUrl: `data:${mime};base64,${inline.data}`,
               modelProvider: `Google Gemini (${model})`,
-              variationNote:
-                (params.version || 1) > 1
-                  ? `Versión #${params.version} — Lámina original generada con Gemini`
-                  : params.style === 'acuarela_naturalista'
-                    ? 'Lámina original en acuarela botánica sobre papel algodón'
-                    : 'Apunte de campo original en lápiz grafito 2B/4B',
+              variationNote: buildStyleVariationNote(params.style, params.version, 'Gemini'),
             };
           }
         }
@@ -1013,12 +1041,7 @@ export async function generateNaturalistPlateWithGemini(
           return {
             imageUrl: `data:image/jpeg;base64,${cfJson.result.image}`,
             modelProvider: 'Cloudflare Workers AI (FLUX.1-schnell)',
-            variationNote:
-              (params.version || 1) > 1
-                ? `Versión #${params.version} — Lámina botánica generada con IA`
-                : params.style === 'acuarela_naturalista'
-                  ? 'Lámina en acuarela botánica sobre papel algodón'
-                  : 'Apunte de campo en lápiz grafito 2B/4B',
+            variationNote: buildStyleVariationNote(params.style, params.version, 'IA'),
           };
         }
       } else {
@@ -1059,12 +1082,7 @@ export async function generateNaturalistPlateWithGemini(
           return {
             imageUrl: `data:${ct};base64,${buf.toString('base64')}`,
             modelProvider: 'Hugging Face (FLUX.1-schnell)',
-            variationNote:
-              (params.version || 1) > 1
-                ? `Versión #${params.version} — Lámina botánica generada con IA`
-                : params.style === 'acuarela_naturalista'
-                  ? 'Lámina en acuarela botánica sobre papel algodón'
-                  : 'Apunte de campo en lápiz grafito 2B/4B',
+            variationNote: buildStyleVariationNote(params.style, params.version, 'IA'),
           };
         }
       } else {
