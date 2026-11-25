@@ -6,6 +6,7 @@ import { App } from '../App';
 import {
   ARGENTINA_BIRDS_CATALOG,
   BIOMA_ARGENTINA_CATALOG,
+  getSpeciesGardenEcology,
   getSpeciesGroup,
   inferOrganismGroupFromMeta,
   searchSpeciesCatalog,
@@ -14,7 +15,7 @@ import {
   ILLUSTRATION_STYLES_ORDER,
   ORGANISM_GROUPS_ORDER,
 } from '../types/domain';
-import { identifyBirdFromPhoto } from '../services/aiBirdService';
+import { generateOrReuseIllustration, identifyBirdFromPhoto } from '../services/aiBirdService';
 import {
   exportFullBackupJson,
   importFullBackupJson,
@@ -34,8 +35,15 @@ import {
   inferServerOrganismGroup,
   isAllowedImageProxyUrl,
   resolveActiveVisionModel,
+  SYSTEM_PROMPT_IDENTIFICACION_BIOMA_AR,
 } from '../../server/secureAiProxy';
-import { renderBotanicalPlateFromImage } from '../services/watercolorCanvasRenderer';
+import {
+  buildR2SignedRequest,
+  firestoreValueToJs,
+  getCloudStorageStatus,
+  isValidMediaObjectKey,
+  jsToFirestoreValue,
+} from '../../server/cloudStorageService';
 
 describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y visor ampliado', () => {
   beforeEach(() => {
@@ -323,9 +331,6 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
     expect(grPrompt).toContain('Coturnix japonica');
     expect(grPrompt).toContain('graphite pencil');
     expect(grPrompt).toContain('NO text');
-
-    // En jsdom (sin canvas 2d real), el renderer local degrada graciosamente devolviendo null
-    expect(typeof renderBotanicalPlateFromImage).toBe('function');
   });
 
   it('Cubre los 5 grupos de Bioma Argentina con rol ecológico, apodos locales y prompts adaptados por grupo', () => {
@@ -399,15 +404,88 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
     // Ningún modelo obsoleto 2.x (404) debe quedar en la lista activa de visión ni pasar desde env viejo
     expect(DEFAULT_VISION_MODELS).not.toContain('gemini-2.0-flash');
     expect(DEFAULT_VISION_MODELS).not.toContain('gemini-2.5-flash');
-    expect(DEFAULT_VISION_MODELS[0]).toBe('gemini-3.1-flash-lite');
+    expect(DEFAULT_VISION_MODELS[0]).toBe('gemini-3-flash-preview');
     expect(resolveActiveVisionModel({ GEMINI_VISION_MODEL: 'gemini-2.0-flash' })).toBe(
-      'gemini-3.1-flash-lite'
+      'gemini-3-flash-preview'
     );
     expect(resolveActiveVisionModel({ GEMINI_VISION_MODEL: 'gemini-2.5-flash' })).toBe(
-      'gemini-3.1-flash-lite'
+      'gemini-3-flash-preview'
     );
     expect(resolveActiveVisionModel({ GEMINI_VISION_MODEL: 'gemini-3.5-flash-lite' })).toBe(
       'gemini-3.5-flash-lite'
     );
+  });
+
+  it('Incluye Mariposa limonera (cola de golondrina / Heraclides thoas) y ecología de jardín completa en todo el catálogo', () => {
+    const swallowtail = searchSpeciesCatalog('cola de golondrina');
+    expect(swallowtail.some((s) => s.scientificName === 'Heraclides thoas')).toBe(true);
+
+    // Toda especie del catálogo debe explicar qué busca en el jardín, flores, frutales y qué come
+    for (const sp of BIOMA_ARGENTINA_CATALOG) {
+      const eco = getSpeciesGardenEcology(sp);
+      expect(eco.seeksInGarden.length).toBeGreaterThan(8);
+      expect(eco.preferredFlowers.length).toBeGreaterThan(8);
+      expect(eco.preferredFruitTrees.length).toBeGreaterThan(8);
+      expect(eco.insectsOrFoodEaten.length).toBeGreaterThan(8);
+    }
+
+    // El prompt de visión exige observación visual previa, coherencia cromática y gardenEcology
+    expect(SYSTEM_PROMPT_IDENTIFICACION_BIOMA_AR).toContain('visualObservation');
+    expect(SYSTEM_PROMPT_IDENTIFICACION_BIOMA_AR).toContain('Heraclides thoas');
+    expect(SYSTEM_PROMPT_IDENTIFICACION_BIOMA_AR).toContain('gardenEcology');
+  });
+
+  it('No degrada ilustraciones con filtros locales: deja en estado pendiente IA cuando falta proveedor de imagen', async () => {
+    const res = await generateOrReuseIllustration({
+      taxonId: 'sp_heraclides_thoas',
+      style: 'muralismo_fauna',
+      existingIllustrations: [],
+      forceNewVersion: false,
+    });
+    expect(res.reused).toBe(false);
+    expect(res.illustration.isPendingAi).toBe(true);
+    expect(res.aiError).toBeTruthy();
+    expect(res.illustration.modelProvider).toContain('pendiente');
+  });
+
+  it('Serializa Firestore correctamente, firma peticiones AWS SigV4 para Cloudflare R2 y bloquea rutas inválidas', () => {
+    const sample = {
+      id: 'nb_1',
+      count: 3,
+      ratio: 1.5,
+      active: true,
+      note: null,
+      tags: ['jardin', 'mariposa'],
+      nested: { seeksInGarden: 'Néctar de lantanas y cítricos' },
+    };
+    const encoded = jsToFirestoreValue(sample);
+    const decoded = firestoreValueToJs(encoded as unknown as Record<string, unknown>);
+    expect(decoded).toEqual(sample);
+
+    const signed = buildR2SignedRequest({
+      method: 'PUT',
+      key: 'users/uid_1/photos/sighting_1.jpg',
+      body: Buffer.from('jpeg-bytes'),
+      contentType: 'image/jpeg',
+      config: {
+        accountId: 'acc123',
+        accessKeyId: 'AKIA_TEST',
+        secretAccessKey: 'SECRET_TEST',
+        bucketName: 'bioma-media',
+      },
+      now: new Date('2026-11-24T15:00:00Z'),
+    });
+    expect(signed.url).toBe('https://acc123.r2.cloudflarestorage.com/bioma-media/users/uid_1/photos/sighting_1.jpg');
+    expect(signed.headers.Authorization).toContain('AWS4-HMAC-SHA256 Credential=AKIA_TEST/20261124/auto/s3/aws4_request');
+    expect(signed.headers['x-amz-date']).toBe('20261124T150000Z');
+
+    expect(isValidMediaObjectKey('users/google_123/photos/abc.jpg')).toBe(true);
+    expect(isValidMediaObjectKey('public/tok_1/ill_1.png')).toBe(true);
+    expect(isValidMediaObjectKey('../secret.env')).toBe(false);
+    expect(isValidMediaObjectKey('users/..\\evil.jpg')).toBe(false);
+
+    const emptyCloud = getCloudStorageStatus({});
+    expect(emptyCloud.firestoreConfigured).toBe(false);
+    expect(emptyCloud.r2BucketConfigured).toBe(false);
   });
 });

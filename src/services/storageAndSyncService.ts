@@ -1,6 +1,7 @@
 import {
   findSpeciesByTaxonId,
   getCustomSpeciesList,
+  getSpeciesGardenEcology,
   getSpeciesGroup,
   hydrateCustomSpecies,
 } from '../data/argentinaBirdsCatalog';
@@ -15,6 +16,15 @@ import {
   SyncStatus,
   UserProfile,
 } from '../types/domain';
+
+function getApiBase(): string {
+  const custom = import.meta.env.VITE_BACKEND_API_URL;
+  return custom ? custom.replace(/\/$/, '') : '';
+}
+
+function isTestEnvironment(): boolean {
+  return typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent || '');
+}
 
 const IDB_NAME = 'cuaderno_de_aves_idb_v1';
 const IDB_VERSION = 1;
@@ -314,10 +324,154 @@ export function saveCloudBackupForUser(payload: CloudBackupPayload): void {
   }
 }
 
+export interface RealCloudSyncResult {
+  finalSyncStatus: SyncStatus;
+  errorMessage?: string;
+  remoteSynced?: boolean;
+  sightingPhotoUrls?: Record<string, string>;
+  illustrationUrls?: Record<string, string>;
+}
+
 /**
- * Sincroniza de forma idempotente un avistamiento y su archivo binario hacia el respaldo en la nube
- * asociado a la cuenta de Google de Valeria (§6, CA10, CA11).
- * No declara 'respaldado' hasta verificar que el binario de la fotografía y los metadatos están en la nube.
+ * Sincroniza el estado completo (cuadernos, láminas, avistamientos, fotos en Cloudflare R2
+ * y metadatos en Google Firestore) a través del backend autenticado `/api/cloud/sync`.
+ */
+export async function syncFullStateToRemoteCloud(params: {
+  uid: string;
+  state: AppPersistedState;
+  isOnline: boolean;
+  fullSync?: boolean;
+}): Promise<{
+  configured: boolean;
+  ok: boolean;
+  sightingPhotoUrls?: Record<string, string>;
+  illustrationUrls?: Record<string, string>;
+  errorMessage?: string;
+}> {
+  if (isTestEnvironment() || !params.isOnline) {
+    return { configured: false, ok: false };
+  }
+
+  try {
+    const hydratedSightings = await rehydrateSightingPhotosFromIndexedDb(params.state.sightings);
+    const mergedCustom = Array.from(
+      new Map(
+        [...(params.state.customSpecies || []), ...getCustomSpeciesList()].map((sp) => [
+          sp.taxonId,
+          sp,
+        ])
+      ).values()
+    );
+
+    const res = await fetch(`${getApiBase()}/api/cloud/sync`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uid: params.uid,
+        notebooks: params.state.notebooks,
+        sheets: params.state.sheets,
+        sightings: hydratedSightings,
+        illustrations: params.state.illustrations,
+        customSpecies: mergedCustom,
+        fullSync: Boolean(params.fullSync),
+      }),
+    });
+
+    if (!res.ok) {
+      const errJson = (await res.json().catch(() => ({}))) as { message?: string };
+      return {
+        configured: true,
+        ok: false,
+        errorMessage: errJson.message || `Error HTTP ${res.status} al sincronizar con la nube.`,
+      };
+    }
+
+    const data = (await res.json()) as {
+      configured?: boolean;
+      sightingPhotoUrls?: Record<string, string>;
+      illustrationUrls?: Record<string, string>;
+    };
+
+    return {
+      configured: Boolean(data.configured),
+      ok: true,
+      sightingPhotoUrls: data.sightingPhotoUrls,
+      illustrationUrls: data.illustrationUrls,
+    };
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
+      errorMessage: err instanceof Error ? err.message : 'Error de red al sincronizar con la nube.',
+    };
+  }
+}
+
+/**
+ * Carga el estado real persistido en Google Cloud Firestore (+ URLs de Cloudflare R2)
+ * para restaurar automáticamente los cuadernos en cualquier teléfono o navegador.
+ */
+export async function loadFullStateFromRemoteCloud(
+  uid: string
+): Promise<{ configured: boolean; state: AppPersistedState | null }> {
+  if (isTestEnvironment()) {
+    return { configured: false, state: null };
+  }
+  try {
+    const res = await fetch(`${getApiBase()}/api/cloud/state?uid=${encodeURIComponent(uid)}`, {
+      credentials: 'include',
+    });
+    if (!res.ok) {
+      return { configured: false, state: null };
+    }
+    const data = (await res.json()) as {
+      configured?: boolean;
+      state?: {
+        notebooks?: Notebook[];
+        sheets?: NotebookSpeciesSheet[];
+        sightings?: Sighting[];
+        illustrations?: Illustration[];
+        customSpecies?: SpeciesCatalogEntry[];
+        updatedAt?: string | null;
+      } | null;
+    };
+    if (!data.configured || !data.state) {
+      return { configured: Boolean(data.configured), state: null };
+    }
+
+    const customSpecies = Array.isArray(data.state.customSpecies) ? data.state.customSpecies : [];
+    hydrateCustomSpecies(customSpecies);
+
+    const notebooks = Array.isArray(data.state.notebooks)
+      ? data.state.notebooks.map((nb) => ({ ...nb, syncStatus: 'respaldado' as SyncStatus }))
+      : [];
+    const sheets = Array.isArray(data.state.sheets) ? data.state.sheets : [];
+    const sightings = Array.isArray(data.state.sightings)
+      ? data.state.sightings.map((s) => ({ ...s, syncStatus: 'respaldado' as SyncStatus }))
+      : [];
+    const illustrations = Array.isArray(data.state.illustrations) ? data.state.illustrations : [];
+
+    return {
+      configured: true,
+      state: {
+        user: null,
+        notebooks,
+        sheets,
+        sightings,
+        illustrations,
+        customSpecies,
+      },
+    };
+  } catch {
+    return { configured: false, state: null };
+  }
+}
+
+/**
+ * Sincroniza de forma idempotente un avistamiento y su archivo binario hacia la nube real
+ * (Firestore + Cloudflare R2 cuando está configurado en el servidor, con respaldo local offline-first).
+ * No declara 'respaldado' hasta verificar que el binario de la fotografía y los metadatos están seguros.
  */
 export async function syncSightingAndNotebookToCloud(params: {
   uid: string;
@@ -325,7 +479,7 @@ export async function syncSightingAndNotebookToCloud(params: {
   state: AppPersistedState;
   isOnline: boolean;
   simulateNetworkFailure?: boolean;
-}): Promise<{ finalSyncStatus: SyncStatus; errorMessage?: string }> {
+}): Promise<RealCloudSyncResult> {
   const { uid, sighting, state, isOnline, simulateNetworkFailure } = params;
 
   if (!isOnline) {
@@ -339,7 +493,7 @@ export async function syncSightingAndNotebookToCloud(params: {
     };
   }
 
-  // 1. Verificar que el archivo binario original esté presente en IndexedDB o en el registro local
+  // 1. Verificar que el archivo binario o URL remota de la fotografía esté disponible
   const binaryData =
     (await loadPhotoBinaryFromIndexedDb(sighting.photoStorageKey)) || sighting.sanitizedPhotoDataUrl;
 
@@ -350,7 +504,45 @@ export async function syncSightingAndNotebookToCloud(params: {
     };
   }
 
-  // 2. Subida idempotente usando clientSightingId (sighting.id) como clave única
+  // 2. Intentar sincronización real con Firestore + Cloudflare R2 en el servidor
+  let remoteSynced = false;
+  let sightingPhotoUrls: Record<string, string> | undefined;
+  let illustrationUrls: Record<string, string> | undefined;
+
+  if (!isTestEnvironment()) {
+    const stateWithSighting: AppPersistedState = {
+      ...state,
+      sightings: state.sightings.some((s) => s.id === sighting.id)
+        ? state.sightings.map((s) =>
+            s.id === sighting.id ? { ...sighting, sanitizedPhotoDataUrl: binaryData } : s
+          )
+        : [...state.sightings, { ...sighting, sanitizedPhotoDataUrl: binaryData }],
+    };
+
+    const remote = await syncFullStateToRemoteCloud({
+      uid,
+      state: stateWithSighting,
+      isOnline: true,
+      fullSync: false,
+    });
+
+    if (remote.configured && !remote.ok) {
+      return {
+        finalSyncStatus: 'error',
+        errorMessage:
+          remote.errorMessage ||
+          'No pudimos confirmar el guardado en Firestore/R2. Se reintentará automáticamente.',
+      };
+    }
+
+    if (remote.configured && remote.ok) {
+      remoteSynced = true;
+      sightingPhotoUrls = remote.sightingPhotoUrls;
+      illustrationUrls = remote.illustrationUrls;
+    }
+  }
+
+  // 3. Mantener copia espejo local para acceso offline instantáneo y tests
   const existingCloud = loadCloudBackupForUser(uid) || {
     uid,
     updatedAt: new Date().toISOString(),
@@ -361,10 +553,12 @@ export async function syncSightingAndNotebookToCloud(params: {
     backedUpPhotos: {},
   };
 
-  existingCloud.backedUpPhotos[sighting.photoStorageKey] = binaryData;
+  const finalPhotoRef = sightingPhotoUrls?.[sighting.id] || binaryData;
+  existingCloud.backedUpPhotos[sighting.photoStorageKey] = finalPhotoRef;
 
   const updatedSighting: Sighting = {
     ...sighting,
+    sanitizedPhotoDataUrl: finalPhotoRef,
     syncStatus: 'respaldado',
     lastSyncError: undefined,
     updatedAt: new Date().toISOString(),
@@ -378,10 +572,14 @@ export async function syncSightingAndNotebookToCloud(params: {
     existingCloud.sightings.push(updatedSighting);
   }
 
-  // Sincronizar cuadernos, fichas, ilustraciones y especies descubiertas vinculadas
-  existingCloud.notebooks = state.notebooks.map((nb) => ({ ...nb, syncStatus: 'respaldado' as SyncStatus }));
+  existingCloud.notebooks = state.notebooks.map((nb) => ({
+    ...nb,
+    syncStatus: 'respaldado' as SyncStatus,
+  }));
   existingCloud.sheets = [...state.sheets];
-  existingCloud.illustrations = [...state.illustrations];
+  existingCloud.illustrations = state.illustrations.map((ill) =>
+    illustrationUrls?.[ill.id] ? { ...ill, imageUrl: illustrationUrls[ill.id] } : ill
+  );
   existingCloud.customSpecies = Array.from(
     new Map(
       [...(state.customSpecies || []), ...getCustomSpeciesList()].map((sp) => [sp.taxonId, sp])
@@ -394,35 +592,63 @@ export async function syncSightingAndNotebookToCloud(params: {
   // Actualizar proyecciones públicas de cuadernos compartidos que estén activos
   for (const nb of existingCloud.notebooks) {
     if (nb.shareConfig.isEnabled && nb.shareConfig.shareToken) {
-      publishOrUpdateSanitizedNotebookProjection(
+      const projection = publishOrUpdateSanitizedNotebookProjection(
         nb,
         existingCloud.sheets,
         existingCloud.sightings,
         existingCloud.illustrations
       );
+      if (projection && remoteSynced) {
+        void publishSanitizedNotebookToRemoteCloud(uid, projection);
+      }
     }
   }
 
-  return { finalSyncStatus: 'respaldado' };
+  return {
+    finalSyncStatus: 'respaldado',
+    remoteSynced,
+    sightingPhotoUrls,
+    illustrationUrls,
+  };
 }
 
 /**
- * Simula el cambio de teléfono Android de Valeria (CA11):
- * Borra por completo el almacenamiento local del dispositivo (localStorage + IndexedDB)
- * y restaura desde la nube únicamente los registros confirmados como 'respaldado' en su cuenta de Google.
+ * Restaura los cuadernos, láminas y fotografías respaldadas al cambiar de teléfono Android (CA11):
+ * Borra la caché local y descarga primero desde Firestore + Cloudflare R2 (si están configurados),
+ * con respaldo local en modo de pruebas/offline.
  */
-export async function restoreFromGoogleCloudOnNewDevice(uid: string): Promise<AppPersistedState | null> {
+export async function restoreFromGoogleCloudOnNewDevice(
+  uid: string,
+  userProfile?: UserProfile | null
+): Promise<AppPersistedState | null> {
   // 1. Limpiar caché local del dispositivo anterior
   localStorage.removeItem(LOCAL_DEVICE_STATE_KEY);
   await clearLocalDeviceIndexedDb();
 
-  // 2. Descargar respaldo asociado a la cuenta de Google
+  // 2. Intentar descarga real desde Firestore + Cloudflare R2
+  if (!isTestEnvironment()) {
+    const remote = await loadFullStateFromRemoteCloud(uid);
+    if (remote.configured && remote.state && remote.state.notebooks.length > 0) {
+      const restoredRemote: AppPersistedState = {
+        ...remote.state,
+        user: userProfile || {
+          uid,
+          displayName: 'Valeria',
+          email: 'valedepadua@gmail.com',
+          lastBackupAt: new Date().toISOString(),
+        },
+      };
+      saveLocalDeviceState(restoredRemote);
+      return restoredRemote;
+    }
+  }
+
+  // 3. Fallback a respaldo espejo local (tests / modo sin Firestore configurado)
   const cloud = loadCloudBackupForUser(uid);
   if (!cloud) {
     return null;
   }
 
-  // 3. Rehidratar binarios de fotos respaldadas en IndexedDB del nuevo teléfono
   for (const s of cloud.sightings) {
     const backedPhoto = cloud.backedUpPhotos[s.photoStorageKey] || s.sanitizedPhotoDataUrl;
     if (backedPhoto) {
@@ -433,7 +659,7 @@ export async function restoreFromGoogleCloudOnNewDevice(uid: string): Promise<Ap
   hydrateCustomSpecies(cloud.customSpecies);
 
   const restoredState: AppPersistedState = {
-    user: {
+    user: userProfile || {
       uid,
       displayName: 'Valeria',
       email: 'valeria.jardinyviajes@gmail.com',
@@ -520,6 +746,7 @@ export function publishOrUpdateSanitizedNotebookProjection(
         dietTag: species.dietTag,
         ecologicalRole: species.ecologicalRole,
         coexistenceNote: species.coexistenceNote,
+        gardenEcology: getSpeciesGardenEcology(species),
         identificationTraits: species.identificationTraits,
         typicalBehavior: species.typicalBehavior,
         dietAndHabitat: species.dietAndHabitat,
@@ -576,8 +803,86 @@ export function revokePublicNotebookShareToken(token: string): void {
 }
 
 /**
- * Consulta de backend/lectura pública de un enlace compartido.
- * Aplica control de acceso estricto: si el token no existe o fue revocado, rechaza el acceso (CA15).
+ * Publica o actualiza una proyección pública en Firestore + R2 para que el enlace `/?share=<token>`
+ * funcione desde cualquier teléfono o computadora del mundo.
+ */
+export async function publishSanitizedNotebookToRemoteCloud(
+  uid: string,
+  projection: PublicNotebookProjection
+): Promise<boolean> {
+  if (isTestEnvironment()) return false;
+  try {
+    const res = await fetch(`${getApiBase()}/api/cloud/share`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid, projection }),
+    });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { published?: boolean };
+    return Boolean(data.published);
+  } catch {
+    return false;
+  }
+}
+
+export async function revokePublicNotebookInRemoteCloud(
+  uid: string,
+  shareToken: string
+): Promise<boolean> {
+  if (isTestEnvironment()) return false;
+  try {
+    const res = await fetch(`${getApiBase()}/api/cloud/share/revoke`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid, shareToken }),
+    });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { revoked?: boolean };
+    return Boolean(data.revoked);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Consulta remota de un cuaderno público compartido (`/?share=<token>`) desde Firestore,
+ * con fallback automático a la caché local si el servidor aún no tiene Firestore configurado.
+ */
+export async function fetchPublicNotebookByTokenAsync(
+  token: string
+): Promise<{ status: 'ok'; notebook: PublicNotebookProjection } | { status: 'revoked' | 'not_found' }> {
+  if (!isTestEnvironment()) {
+    try {
+      const res = await fetch(
+        `${getApiBase()}/api/public/notebook/${encodeURIComponent(token)}`
+      );
+      if (res.ok) {
+        const data = (await res.json()) as {
+          configured?: boolean;
+          status?: 'ok' | 'revoked' | 'not_found' | 'unconfigured';
+          notebook?: PublicNotebookProjection;
+        };
+        if (data.configured) {
+          if (data.status === 'ok' && data.notebook) {
+            return { status: 'ok', notebook: data.notebook };
+          }
+          if (data.status === 'revoked') {
+            return { status: 'revoked' };
+          }
+          return { status: 'not_found' };
+        }
+      }
+    } catch {
+      // Fallback a proyección local si no hay red
+    }
+  }
+  return fetchPublicNotebookByToken(token);
+}
+
+/**
+ * Consulta síncrona local de un enlace compartido (usada en pruebas y fallback offline).
  */
 export function fetchPublicNotebookByToken(
   token: string

@@ -35,11 +35,11 @@ La elección de PWA frente a Flutter o Capacitor está justificada en el [docume
 
 ## Estado actual
 
-- **Identificación real con Google Gemini + referencias visuales reales de iNaturalist**: el servidor integrado en Vite (`/api/identify-bird`, `/api/generate-illustration`, `/api/bird-reference`) analiza fotografías reales con Gemini Vision y enriquece cada especie candidata con fotografías reales desde iNaturalist para compararlas lado a lado sin salir de la app.
-- **Catálogo de aves de Argentina ampliado**: incluye 28 especies frecuentes (ratona común/ratucha, hornero, chingolo, benteveo, zorzal colorado, calandrias, picaflores, tero, cotorra, carpinteros, cabecita negra, cardenal, celestino, etc.) más búsqueda en vivo en todo iNaturalist.
-- **Si aún no configuraste `GEMINI_API_KEY`**: la app nunca adivina especies al azar; te avisa con claridad y te permite buscar y comparar visualmente con fotos reales de aves de Argentina.
-- El respaldo en la nube con cuenta de Google sigue operando en modo local/simulado sobre IndexedDB; el SDK de Firebase y [`firestore.rules`](firestore.rules) ya están incluidos para conectarlo.
-- La suite de tests (`npm test`) verifica los criterios de aceptación (CA01–CA17) y las mejoras de comparación visual, ficha compacta y visor ampliado.
+- **Identificación precisa y resiliente con Google Gemini (`gemini-3-flash-preview` + cooldown inteligente ante picos 503/429 + respaldos opcionales Groq/OpenRouter/HF)** + fotos reales de referencia de iNaturalist. Incluye protocolo visual previo (`visualObservation`) para coherencia cromática y morfológica y ecología de jardín (`¿Qué viene a buscar a tu jardín?`: flores, árboles frutales/nativos y qué insectos o alimentos consume).
+- **Ilustraciones 100% generadas por IA (sin filtros locales)**: Muralismo de fauna autóctona, Acuarela naturalista y Lápiz grafito se generan exclusivamente mediante modelos de IA en el servidor (Google Gemini Imagen con referencia anatómica, Cloudflare Workers AI FLUX.1-schnell, Hugging Face FLUX.1-schnell u OpenAI `gpt-image-1`).
+- **Persistencia real en la nube (Firebase Firestore + Cloudflare R2)**: el servidor sincroniza colecciones estructuradas en Firestore (`users/{uid}/notebooks`, `sheets`, `sightings`, `illustrations`, `custom_species`, `public_shared_notebooks/{token}`) y almacena fotos sanitizadas e ilustraciones en un bucket Cloudflare R2, conservando IndexedDB offline-first en el dispositivo.
+- **Postales para compartir (Historia 9:16 y Feed 4:5)** con texto completo en múltiples líneas sin recortes (`…`), tamaños de imagen preservados e información ecológica del jardín aprovechando el espacio cuando no se incluye nota personal.
+- La suite de tests (`npm test`) verifica los criterios de aceptación (CA01–CA17), ecología de jardín, política de ilustraciones IA y serialización Firestore / firma SigV4 R2.
 
 ## Cómo ejecutarla
 

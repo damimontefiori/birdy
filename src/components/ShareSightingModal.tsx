@@ -8,7 +8,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import { getSpeciesGroup } from '../data/argentinaBirdsCatalog';
+import { getSpeciesGardenEcology, getSpeciesGroup } from '../data/argentinaBirdsCatalog';
 import {
   composeSocialShareCard,
   RenderedSocialCard,
@@ -58,6 +58,8 @@ export const ShareSightingModal: React.FC<ShareSightingModalProps> = ({
       habitatTag: species.habitatTag,
       dietTag: species.dietTag,
       ecologicalRole: species.ecologicalRole,
+      coexistenceNote: species.coexistenceNote,
+      gardenEcology: getSpeciesGardenEcology(species),
       includeSpeciesInfo,
       illustrationUrl,
       originalPhotoSanitizedUrl: sighting.sanitizedPhotoDataUrl,

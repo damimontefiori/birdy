@@ -3,7 +3,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { handleBirdyApiRequest } from './apiPlugin.ts';
 import { getAuthConfigStatus } from './authService.ts';
-import { resolveServerEnv } from './secureAiProxy.ts';
+import { getCloudStorageStatus } from './cloudStorageService.ts';
+import { getEffectiveAiImageProviders, resolveServerEnv } from './secureAiProxy.ts';
 
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || '0.0.0.0';
@@ -84,9 +85,17 @@ const server = http.createServer((req, res) => {
 server.listen(port, host, () => {
   const env = resolveServerEnv();
   const auth = getAuthConfigStatus(env);
+  const cloud = getCloudStorageStatus(env);
+  const imgProviders = getEffectiveAiImageProviders(env);
   console.log(
-    `[Birdy Producción] Escuchando en http://${host}:${port} · Gemini: ${
+    `[Bioma Producción] Escuchando en http://${host}:${port} · Gemini: ${
       env.GEMINI_API_KEY ? 'SÍ' : 'NO'
+    } · Ilustraciones IA extra: ${
+      imgProviders.length > 0 ? imgProviders.join(', ') : 'Solo Gemini'
+    } · Firestore: ${
+      cloud.firestoreConfigured ? `ACTIVO (${cloud.firestoreProjectId})` : 'NO'
+    } · R2 Bucket: ${
+      cloud.r2BucketConfigured ? `ACTIVO (${cloud.r2BucketName})` : 'NO'
     } · Google Auth: ${
       auth.googleAuthConfigured
         ? `ACTIVO (${auth.allowedEmailsCount} cuentas autorizadas)`

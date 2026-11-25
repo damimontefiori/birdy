@@ -1,6 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Check, ExternalLink, Loader2, X, ZoomIn } from 'lucide-react';
-import { findSpeciesByTaxonId, getSpeciesGroup } from '../data/argentinaBirdsCatalog';
+import {
+  findSpeciesByTaxonId,
+  getSpeciesGardenEcology,
+  getSpeciesGroup,
+} from '../data/argentinaBirdsCatalog';
 import { fetchReferencePhotosForSpecies } from '../services/speciesReferenceService';
 import {
   AICandidate,
@@ -255,6 +259,29 @@ export const SpeciesComparisonModal: React.FC<SpeciesComparisonModalProps> = ({
               {coexistenceNote ? ` · ${coexistenceNote}` : ''}
             </div>
           )}
+
+          {(() => {
+            const gEco = candidate?.gardenEcology || getSpeciesGardenEcology(catalogMatch);
+            return (
+              <div className="garden-ecology-card compact">
+                <div className="garden-ecology-header">¿Qué busca en tu jardín?</div>
+                <div className="garden-ecology-grid">
+                  <div className="garden-ecology-item">
+                    <span className="garden-ecology-label">🌸 Flores y plantas</span>
+                    <p>{gEco.preferredFlowers}</p>
+                  </div>
+                  <div className="garden-ecology-item">
+                    <span className="garden-ecology-label">🍋 Frutales / árboles</span>
+                    <p>{gEco.preferredFruitTrees}</p>
+                  </div>
+                  <div className="garden-ecology-item" style={{ gridColumn: '1 / -1' }}>
+                    <span className="garden-ecology-label">🪲 Qué come / insectos</span>
+                    <p>{gEco.insectsOrFoodEaten}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {candidate?.reasoning && catalogMatch.quickSummary && candidate.reasoning !== catalogMatch.quickSummary && (
             <p className="compare-ai-note">

@@ -1,4 +1,4 @@
-import { OrganismGroup, SpeciesCatalogEntry } from '../types/domain';
+import { GardenEcologyInfo, OrganismGroup, SpeciesCatalogEntry } from '../types/domain';
 import { BIOMA_FAUNA_EXTRAS } from './biomaFaunaExtras';
 
 /**
@@ -576,6 +576,177 @@ const RAW_ARGENTINA_BIRDS_CATALOG: SpeciesCatalogEntry[] = [
   },
 ];
 
+const BIRD_GARDEN_ECOLOGY_BY_TAXON: Record<string, GardenEcologyInfo> = {
+  houwre: {
+    seeksInGarden: 'Insectos ocultos en enredaderas, macetas y rincones, además de huecos tranquilos para anidar.',
+    preferredFlowers: 'Enredaderas tupidas (jazmín, madreselva, Santa Rita), arbustos bajos y cercos vivos.',
+    preferredFruitTrees: 'Recorre ramas y cortezas de limoneros, naranjos y frutales buscando arañitas y orugas.',
+    insectsOrFoodEaten: 'Come arañitas, pulgones, orugas pequeñas, mosquitos, polillas y hormigas.',
+  },
+  rufhor2: {
+    seeksInGarden: 'Lombrices e insectos en césped húmedo y barro fresco tras la lluvia para construir su horno.',
+    preferredFlowers: 'Céspedes amplios, canteros con tierra removida y bordes de senderos soleados.',
+    preferredFruitTrees: 'Usa ramas firmes y horquetas de árboles altos (frutales añosos, jacarandá, fresno) para su nido.',
+    insectsOrFoodEaten: 'Come lombrices, grillos, cascarudos, larvas del suelo, hormigas y arañas.',
+  },
+  rucspa1: {
+    seeksInGarden: 'Semillas caídas en el césped, insectos tiernos para sus crías y arbustos bajos donde refugiarse.',
+    preferredFlowers: 'Pastos nativos, gramíneas ornamentales, lavandas, salvias y canteros con semillas.',
+    preferredFruitTrees: 'Aprovecha frutitos blandos y busca insectos al pie de cítricos, moreras y arbustos.',
+    insectsOrFoodEaten: 'Come semillas pequeñas, brotes tiernos, hormigas, orugas y pequeños escarabajos.',
+  },
+  grekis: {
+    seeksInGarden: 'Insectos voladores, agua para bañarse en fuentes o piletas y frutos dulces en árboles altos.',
+    preferredFlowers: 'Usa pérgolas, postes y copas soleadas como atalaya para lanzarse sobre insectos.',
+    preferredFruitTrees: 'Higuera, níspero, morera, ciruelo, palta y frutales con frutos carnosos.',
+    insectsOrFoodEaten: 'Come moscas, libélulas, langostas, cascarudos, lombrices, frutas maduras y peces chicos.',
+  },
+  rubthr1: {
+    seeksInGarden: 'Lombrices en el césped regado, sombra fresca bajo árboles y frutos carnosos maduros.',
+    preferredFlowers: 'Canteros húmedos con hojarasca, sombra de helechos y arbustos con bayas.',
+    preferredFruitTrees: 'Higuera, morera, níspero, ciruelo, duraznero, cítricos maduros y chal-chal.',
+    insectsOrFoodEaten: 'Come lombrices, caracoles chicos, larvas, insectos del suelo y frutos dulces.',
+  },
+  chbmoc1: {
+    seeksInGarden: 'Insectos en el césped, bayas y frutas maduras, y ramas altas soleadas desde donde cantar.',
+    preferredFlowers: 'Arbustos nativos con bayas (tala, chal-chal, espinillo) y cercos vivos amplios.',
+    preferredFruitTrees: 'Higuera, níspero, morera, uvas, ciruelo y duraznero.',
+    insectsOrFoodEaten: 'Come langostas, cascarudos, hormigas, orugas y frutos dulces de estación.',
+  },
+  patmock1: {
+    seeksInGarden: 'Bayas silvestres e insectos en jardines abiertos y claros soleados patagónicos.',
+    preferredFlowers: 'Arbustos nativos como calafate, maqui, rosa mosqueta y lavandas.',
+    preferredFruitTrees: 'Frutales de clima fresco (cerezos, ciruelos, manzanos, frambuesas y calafate).',
+    insectsOrFoodEaten: 'Come insectos del suelo, arañas, larvas y frutos silvestres.',
+  },
+  saytan1: {
+    seeksInGarden: 'Frutas dulces maduras, néctar y pétalos tiernos en las copas arboladas del jardín.',
+    preferredFlowers: 'Flores de ceibo, hibiscos, lapacho, jacarandá y flores carnosas de frutales.',
+    preferredFruitTrees: 'Higuera, níspero, morera, mandarina, naranja dulce, duraznero y mamón.',
+    insectsOrFoodEaten: 'Principalmente frutas maduras, néctar y pétalos; complementa con pequeños insectos.',
+  },
+  redcre1: {
+    seeksInGarden: 'Semillas en el suelo despejado, brotes tiernos y árboles donde posarse en pareja.',
+    preferredFlowers: 'Gramíneas, pastizales bajos, girasoles y arbustos espinosos nativos.',
+    preferredFruitTrees: 'Tala, morera, frutales con semillas y frutos secos caídos.',
+    insectsOrFoodEaten: 'Come semillas variadas, pequeños frutos e insectos como langostas y orugas.',
+  },
+  glbem1: {
+    seeksInGarden: 'Néctar abundante de flores tubulares luminosas y agua fina (rocío/riego) para bañarse.',
+    preferredFlowers: 'Salvia guaranítica, salvia roja, lantana, hibisco, jazmín, madreselva, lavanda y bignonias.',
+    preferredFruitTrees: 'Ceibo, lapacho, jacarandá, cítricos en flor y níspero en floración.',
+    insectsOrFoodEaten: 'Toma néctar floral y caza diminutos mosquitos, jejenes, pulgones y arañitas para proteína.',
+  },
+  gilhum1: {
+    seeksInGarden: 'Néctar de flores tubulares grandes en enredaderas y árboles floridos sombreados.',
+    preferredFlowers: 'Salvias, hibiscos, fucsias, madreselva, bignonias, malvaviscos y ceibos.',
+    preferredFruitTrees: 'Ceibo, lapacho, jacarandá, pata de vaca y cítricos en flor.',
+    insectsOrFoodEaten: 'Liba néctar energético y captura mosquitos diminutos y arañitas al vuelo.',
+  },
+  houspa: {
+    seeksInGarden: 'Semillas, migas, agua en bebederos y aleros o huecos tranquilos donde anidar.',
+    preferredFlowers: 'Céspedes, canteros con semillas y cercos vivos urbanos.',
+    preferredFruitTrees: 'Morera, higuera y frutales urbanos con frutos caídos.',
+    insectsOrFoodEaten: 'Come semillas, granos y pequeños insectos (especialmente para alimentar a sus pichones).',
+  },
+  eardov1: {
+    seeksInGarden: 'Semillas en el césped, agua limpia y ramas altas donde descansar o anidar.',
+    preferredFlowers: 'Céspedes soleados y canteros con gramíneas o semillas caídas.',
+    preferredFruitTrees: 'Árboles de copa densa y frutales como percha y refugio.',
+    insectsOrFoodEaten: 'Principalmente granívora: semillas, granos y brotes tiernos (casi no come insectos).',
+  },
+  picpig2: {
+    seeksInGarden: 'Frutos de árboles altos, brotes tiernos y copas añosas donde posarse.',
+    preferredFlowers: 'Rara vez baja a flores; prefiere copas de árboles y semillas grandes.',
+    preferredFruitTrees: 'Morera, paraíso, higuera, níspero, tala y árboles de frutos pequeños.',
+    insectsOrFoodEaten: 'Come frutos, semillas y brotes vegetales; no caza insectos.',
+  },
+  monpar: {
+    seeksInGarden: 'Frutas, flores, brotes y árboles altos o palmeras para armar sus nidos comunales.',
+    preferredFlowers: 'Flores de ceibo, jacarandá, eucalipto y plantas con semillas grandes.',
+    preferredFruitTrees: 'Níspero, cítricos, duraznero, ciruelo, nuez pecán, higuera y palmeras pindó.',
+    insectsOrFoodEaten: 'Vegetariana: frutos, semillas, brotes y flores (rara vez insectos).',
+  },
+  soulap1: {
+    seeksInGarden: 'Insectos y lombrices en céspedes amplios y húmedos, especialmente tras el riego o la lluvia.',
+    preferredFlowers: 'No visita flores; prefiere pasto corto y espacios abiertos.',
+    preferredFruitTrees: 'No busca frutales; recorre terrenos despejados y praderas.',
+    insectsOrFoodEaten: 'Come lombrices, grillos, cascarudos, larvas de suelo y pequeños moluscos.',
+  },
+  chimango1: {
+    seeksInGarden: 'Insectos grandes del suelo, lombrices y posaderos altos desde donde observar.',
+    preferredFlowers: 'No visita flores; patrulla céspedes y espacios abiertos.',
+    preferredFruitTrees: 'Usa árboles altos como mirador y refugio.',
+    insectsOrFoodEaten: 'Come langostas, gusanos, escarabajos, carroña y pequeños roedores.',
+  },
+  crecar1: {
+    seeksInGarden: 'Recorre barrios amplios y árboles altos buscando insectos grandes o restos orgánicos.',
+    preferredFlowers: 'No visita flores; prefiere postes y copas despejadas.',
+    preferredFruitTrees: 'Árboles altos como percha panorámica.',
+    insectsOrFoodEaten: 'Come escarabajos grandes, langostas, carroña y pequeñas presas oportunistas.',
+  },
+  grbwoo1: {
+    seeksInGarden: 'Hormigas y larvas ocultas en cortezas de árboles añosos, además de frutas blandas.',
+    preferredFlowers: 'No visita flores; recorre troncos y ramas gruesas.',
+    preferredFruitTrees: 'Frutales añosos (cítricos, níspero, higuera, morera) y árboles de corteza rugosa.',
+    insectsOrFoodEaten: 'Especialista en hormigas, larvas taladradoras de madera, termitas y frutas maduras.',
+  },
+  camfli1: {
+    seeksInGarden: 'Hormigueros en el césped y postes de madera donde posarse en grupo.',
+    preferredFlowers: 'No visita flores; recorre pastizales y jardines amplios.',
+    preferredFruitTrees: 'Árboles espaciados y postes de cerco.',
+    insectsOrFoodEaten: 'Come principalmente hormigas y termitas del suelo.',
+  },
+  guicuc1: {
+    seeksInGarden: 'Insectos grandes en el pasto y ramas soleadas donde tomar sol en bandada familiar.',
+    preferredFlowers: 'Recorre canteros altos, arbustos y cercos vivos cazando presas.',
+    preferredFruitTrees: 'Árboles frondosos y frutales como refugio comunitario.',
+    insectsOrFoodEaten: 'Come langostas, grillos, cascarudos, orugas grandes, arañas y pequeñas lagartijas.',
+  },
+  hoosis1: {
+    seeksInGarden: 'Semillas pequeñas de flores secas, brotes tiernos y cipreses o árboles donde cantar.',
+    preferredFlowers: 'Dientes de león, cardos, cosmos, girasoles, lavandas secas y zinnias con semilla.',
+    preferredFruitTrees: 'Cipreses, fresnos, moreras y árboles ornamentales con semillas finas.',
+    insectsOrFoodEaten: 'Come semillas pequeñas, brotes y ocasionalmente pulgones o insectos diminutos.',
+  },
+  saffin: {
+    seeksInGarden: 'Semillas de pastos en el césped y nidos vacíos de hornero o huecos donde anidar.',
+    preferredFlowers: 'Gramíneas, pastos con espigas, cosmos y canteros soleados.',
+    preferredFruitTrees: 'Aprovecha árboles con nidos viejos de hornero y sombras luminosas.',
+    insectsOrFoodEaten: 'Come semillas de pastos, granos finos y pequeños insectos en época de cría.',
+  },
+  shicow: {
+    seeksInGarden: 'Semillas e insectos en el césped corto, caminando en pequeños grupos.',
+    preferredFlowers: 'Pastos bajos y áreas despejadas del jardín.',
+    preferredFruitTrees: 'Frecuenta copas de árboles y frutales con frutos caídos.',
+    insectsOrFoodEaten: 'Come semillas, granos, grillos, orugas e insectos del césped.',
+  },
+  masgna1: {
+    seeksInGarden: 'Insectos diminutos y larvas entre las ramas finas de árboles y arbustos.',
+    preferredFlowers: 'Arbustos nativos, salvias altas, cercos vivos y enredaderas densas.',
+    preferredFruitTrees: 'Recorre el follaje de cítricos, talas y frutales limpiando plagas diminutas.',
+    insectsOrFoodEaten: 'Come pulgones, pequeñas orugas, mosquitas, arañitas y larvas del follaje.',
+  },
+  verfly: {
+    seeksInGarden: 'Ramas expuestas al sol desde donde lanzarse a atrapar insectos voladores en primavera y verano.',
+    preferredFlowers: 'Jardines luminosos con flores que atraen insectos pequeños al aire libre.',
+    preferredFruitTrees: 'Usa puntas despejadas de árboles y cercos como posadero de caza.',
+    insectsOrFoodEaten: 'Insectívoro aéreo puro: moscas, mosquitos, abejitas pequeñas, polillas y escarabajos al vuelo.',
+  },
+  neocor: {
+    seeksInGarden: 'Visita únicamente jardines con costa de laguna, arroyo o estanque con peces.',
+    preferredFlowers: 'Vegetación ribereña y muelles soleados.',
+    preferredFruitTrees: 'Ramas secas sobre el agua para secar sus alas.',
+    insectsOrFoodEaten: 'Se alimenta casi exclusivamente de peces pequeños y medianos.',
+  },
+  burowl: {
+    seeksInGarden: 'Campos abiertos, baldíos o quintas amplias con insectos nocturnos y crepusculares.',
+    preferredFlowers: 'No visita flores; usa postes bajos y pastizales despejados.',
+    preferredFruitTrees: 'No busca frutales; prefiere suelo despejado con buena visibilidad.',
+    insectsOrFoodEaten: 'Come cascarudos, langostas, grillos, alacranes y pequeños roedores.',
+  },
+};
+
 function inferDefaultBirdEcologicalRole(bird: SpeciesCatalogEntry): string {
   const diet = normalizeText(bird.dietTag || bird.dietAndHabitat || '');
   if (diet.includes('nectar')) {
@@ -593,6 +764,57 @@ function inferDefaultBirdEcologicalRole(bird: SpeciesCatalogEntry): string {
   return 'Controlador natural de insectos y visitante vivo del jardín';
 }
 
+export function getSpeciesGardenEcology(
+  species?: Partial<SpeciesCatalogEntry> | null
+): GardenEcologyInfo {
+  if (species?.gardenEcology) {
+    return species.gardenEcology;
+  }
+  if (species?.taxonId && BIRD_GARDEN_ECOLOGY_BY_TAXON[species.taxonId]) {
+    return BIRD_GARDEN_ECOLOGY_BY_TAXON[species.taxonId];
+  }
+  const group = getSpeciesGroup(species);
+  const diet = species?.dietTag || species?.dietAndHabitat || '';
+  if (group === 'mariposas') {
+    return {
+      seeksInGarden: 'Néctar de flores soleadas y plantas hospederas donde reproducirse.',
+      preferredFlowers: species?.habitatTag || 'Lantanas, salvias, lavandas, verbenas y flores nativas.',
+      preferredFruitTrees: 'Cítricos, pasionaria o árboles nativos según la especie.',
+      insectsOrFoodEaten: diet || 'Néctar floral en adultos; hojas específicas en etapa de oruga.',
+    };
+  }
+  if (group === 'abejas_abejorros') {
+    return {
+      seeksInGarden: 'Polen, néctar fresco y refugios tranquilos sin pesticidas.',
+      preferredFlowers: 'Lavandas, romero, salvias, albahaca en flor, cosmos y flora nativa.',
+      preferredFruitTrees: 'Cítricos, manzanos, durazneros, nísperos y frutales en floración.',
+      insectsOrFoodEaten: diet || 'Polen y néctar floral (no come insectos).',
+    };
+  }
+  if (group === 'insectos_aracnidos') {
+    return {
+      seeksInGarden: species?.ecologicalRole || 'Refugio en plantas y equilibrio natural de insectos en el jardín.',
+      preferredFlowers: species?.habitatTag || 'Arbustos, canteros floridos y cercos vivos.',
+      preferredFruitTrees: 'Ramas y brotes de frutales o árboles del jardín.',
+      insectsOrFoodEaten: diet || 'Insectos pequeños, savia o materia orgánica según la especie.',
+    };
+  }
+  if (group === 'fauna_vecina') {
+    return {
+      seeksInGarden: species?.ecologicalRole || 'Refugio tranquilo, agua y alimento natural en el jardín.',
+      preferredFlowers: species?.habitatTag || 'Canteros con vegetación baja, sombra y refugios naturales.',
+      preferredFruitTrees: 'Árboles frutales con fruta madura o sombra protectora.',
+      insectsOrFoodEaten: diet || 'Insectos del suelo, caracoles, babosas o frutos caídos.',
+    };
+  }
+  return {
+    seeksInGarden: species?.ecologicalRole || 'Alimento natural, agua fresca y refugio en árboles o arbustos.',
+    preferredFlowers: species?.habitatTag || 'Arbustos nativos, enredaderas y canteros variados.',
+    preferredFruitTrees: 'Frutales de estación (higuera, níspero, morera, cítricos) y árboles nativos.',
+    insectsOrFoodEaten: diet || 'Insectos, semillas o frutos según la especie.',
+  };
+}
+
 export const ARGENTINA_BIRDS_CATALOG: SpeciesCatalogEntry[] = RAW_ARGENTINA_BIRDS_CATALOG.map(
   (bird) => ({
     ...bird,
@@ -601,6 +823,7 @@ export const ARGENTINA_BIRDS_CATALOG: SpeciesCatalogEntry[] = RAW_ARGENTINA_BIRD
     coexistenceNote:
       bird.coexistenceNote ||
       'Inofensiva; ofrecer un bebedero con agua limpia, sombra y plantas nativas la invita a regresar.',
+    gardenEcology: bird.gardenEcology || BIRD_GARDEN_ECOLOGY_BY_TAXON[bird.taxonId],
   })
 );
 
@@ -666,7 +889,7 @@ export function inferOrganismGroupFromMeta(meta: {
 
   // Palabras clave taxonómicas y vernáculas de alta precisión (singular y plural)
   if (
-    /\b(mariposas?|polillas?|orugas?|esfinges?|lepidoptera|nymphalidae|pieridae|papilionidae|hesperiidae|lycaenidae|sphingidae|saturniidae|danaus|agraulis|morpho|vanessa|junonia|eurema|ascia|aellopos|heliconius|papilio|phoebis|pieris|colias|dryas)\b/.test(
+    /\b(mariposas?|polillas?|orugas?|esfinges?|lepidoptera|nymphalidae|pieridae|papilionidae|hesperiidae|lycaenidae|sphingidae|saturniidae|danaus|agraulis|morpho|vanessa|junonia|eurema|ascia|aellopos|heliconius|papilio|heraclides|battus|phoebis|pieris|colias|dryas)\b/.test(
       combined
     )
   ) {
@@ -746,6 +969,7 @@ export function registerCustomSpecies(entry: SpeciesCatalogEntry): SpeciesCatalo
         organismGroup: entry.organismGroup || prev.organismGroup || normalizedGroup,
         ecologicalRole: entry.ecologicalRole || prev.ecologicalRole,
         coexistenceNote: entry.coexistenceNote || prev.coexistenceNote,
+        gardenEcology: entry.gardenEcology || prev.gardenEcology,
         referencePhotos: entry.referencePhotos?.length ? entry.referencePhotos : prev.referencePhotos,
         alternativeNames: Array.from(
           new Set([...(prev.alternativeNames || []), ...(entry.alternativeNames || [])])

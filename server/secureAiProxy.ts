@@ -67,13 +67,26 @@ export interface ServerEnv {
   GROQ_API_KEY?: string;
   OPENROUTER_API_KEY?: string;
   HUGGINGFACE_API_KEY?: string;
+  HUGGINGFACE_IMAGE_MODEL?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
+  CLOUDFLARE_IMAGE_MODEL?: string;
+  OPENAI_API_KEY?: string;
   EBIRD_API_KEY?: string;
   GOOGLE_CLIENT_ID?: string;
   ALLOWED_EMAILS?: string;
   AUTH_SESSION_SECRET?: string;
   REQUIRE_GOOGLE_AUTH?: string;
+  // Persistencia real en la nube (Firestore + Cloudflare R2)
+  FIREBASE_SERVICE_ACCOUNT_JSON?: string;
+  FIREBASE_PROJECT_ID?: string;
+  FIREBASE_CLIENT_EMAIL?: string;
+  FIREBASE_PRIVATE_KEY?: string;
+  CLOUDFLARE_R2_ACCOUNT_ID?: string;
+  CLOUDFLARE_R2_ACCESS_KEY_ID?: string;
+  CLOUDFLARE_R2_SECRET_ACCESS_KEY?: string;
+  CLOUDFLARE_R2_BUCKET_NAME?: string;
+  CLOUDFLARE_R2_PUBLIC_URL?: string;
 }
 
 export interface ReferencePhotoDTO {
@@ -107,15 +120,13 @@ const ALLOWED_IMAGE_PROXY_HOSTS = new Set([
 ]);
 
 export const DEFAULT_VISION_MODELS = [
-  'gemini-3.1-flash-lite',
+  'gemini-3-flash-preview',
   'gemini-3.5-flash-lite',
   'gemini-flash-lite-latest',
-  'gemini-3.1-flash-lite-preview',
-  'gemini-3.8-flash',
-  'gemini-3.7-flash',
-  'gemini-3.6-flash',
+  'gemini-3.5-flash',
   'gemini-flash-latest',
-  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite',
+  'gemini-3.1-flash-lite-preview',
   'gemma-4-31b-it',
   'gemma-4-26b-a4b-it',
 ];
@@ -136,16 +147,42 @@ export function resolveActiveVisionModel(env: ServerEnv): string {
   return DEFAULT_VISION_MODELS[0];
 }
 const DEFAULT_IMAGE_MODELS = [
-  'gemini-3.1-flash-lite-image',
-  'gemini-3.1-flash-image-preview',
   'gemini-3.1-flash-image',
   'gemini-2.5-flash-image',
+  'gemini-3.1-flash-image-preview',
+  'gemini-3-pro-image',
+  'gemini-3.1-flash-lite-image',
 ];
 
-// Memoria efímera de salud de modelos para ir directo al modelo que mejor responde y saltear 404 obsoletos
+// Memoria efímera de salud de modelos: recuerda qué modelo responde bien y enfría temporalmente los 503/429
 let lastWorkingVisionModel: { model: string; expiresAt: number } | null = null;
 const deprecatedVisionModels = new Set<string>();
+const visionModelCooldownUntil = new Map<string, number>();
+let geminiImageQuotaCooldownUntil = 0;
 const WORKING_MODEL_TTL_MS = 1000 * 60 * 15; // 15 minutos
+const HIGH_DEMAND_COOLDOWN_MS = 1000 * 60 * 2; // 2 minutos ante 503/timeout
+const QUOTA_COOLDOWN_MS = 1000 * 60 * 10; // 10 minutos ante 429 (cuota 0)
+
+export function resetVisionModelHealthForTests(): void {
+  lastWorkingVisionModel = null;
+  deprecatedVisionModels.clear();
+  visionModelCooldownUntil.clear();
+  geminiImageQuotaCooldownUntil = 0;
+}
+
+export function getEffectiveAiImageProviders(env: ServerEnv): string[] {
+  const providers: string[] = [];
+  if (env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN) {
+    providers.push(`Cloudflare Workers AI (${env.CLOUDFLARE_IMAGE_MODEL || 'FLUX.1-schnell'})`);
+  }
+  if (env.HUGGINGFACE_API_KEY) {
+    providers.push(`Hugging Face (${env.HUGGINGFACE_IMAGE_MODEL || 'FLUX.1-schnell'})`);
+  }
+  if (env.OPENAI_API_KEY) {
+    providers.push('OpenAI (gpt-image-1)');
+  }
+  return providers;
+}
 
 const inatSpeciesCache = new Map<string, { expiresAt: number; data: BirdReferenceDTO | null }>();
 const inatSearchCache = new Map<string, { expiresAt: number; data: BirdReferenceDTO[] }>();
@@ -199,12 +236,19 @@ export function resolveServerEnv(cwd: string = process.cwd()): ServerEnv {
         fileVars.HF_TOKEN ||
         ''
       ).trim() || undefined,
+    HUGGINGFACE_IMAGE_MODEL:
+      (process.env.HUGGINGFACE_IMAGE_MODEL || fileVars.HUGGINGFACE_IMAGE_MODEL || '').trim() ||
+      undefined,
     CLOUDFLARE_ACCOUNT_ID:
       (process.env.CLOUDFLARE_ACCOUNT_ID || fileVars.CLOUDFLARE_ACCOUNT_ID || '').trim() ||
       undefined,
     CLOUDFLARE_API_TOKEN:
       (process.env.CLOUDFLARE_API_TOKEN || fileVars.CLOUDFLARE_API_TOKEN || '').trim() ||
       undefined,
+    CLOUDFLARE_IMAGE_MODEL:
+      (process.env.CLOUDFLARE_IMAGE_MODEL || fileVars.CLOUDFLARE_IMAGE_MODEL || '').trim() ||
+      undefined,
+    OPENAI_API_KEY: (process.env.OPENAI_API_KEY || fileVars.OPENAI_API_KEY || '').trim() || undefined,
     EBIRD_API_KEY: (process.env.EBIRD_API_KEY || fileVars.EBIRD_API_KEY || '').trim() || undefined,
     GOOGLE_CLIENT_ID:
       (
@@ -220,6 +264,42 @@ export function resolveServerEnv(cwd: string = process.cwd()): ServerEnv {
       (process.env.AUTH_SESSION_SECRET || fileVars.AUTH_SESSION_SECRET || '').trim() || undefined,
     REQUIRE_GOOGLE_AUTH:
       (process.env.REQUIRE_GOOGLE_AUTH || fileVars.REQUIRE_GOOGLE_AUTH || '').trim() || undefined,
+    FIREBASE_SERVICE_ACCOUNT_JSON:
+      (
+        process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
+        fileVars.FIREBASE_SERVICE_ACCOUNT_JSON ||
+        ''
+      ).trim() || undefined,
+    FIREBASE_PROJECT_ID:
+      (process.env.FIREBASE_PROJECT_ID || fileVars.FIREBASE_PROJECT_ID || '').trim() || undefined,
+    FIREBASE_CLIENT_EMAIL:
+      (process.env.FIREBASE_CLIENT_EMAIL || fileVars.FIREBASE_CLIENT_EMAIL || '').trim() ||
+      undefined,
+    FIREBASE_PRIVATE_KEY:
+      (process.env.FIREBASE_PRIVATE_KEY || fileVars.FIREBASE_PRIVATE_KEY || '').trim() || undefined,
+    CLOUDFLARE_R2_ACCOUNT_ID:
+      (
+        process.env.CLOUDFLARE_R2_ACCOUNT_ID ||
+        fileVars.CLOUDFLARE_R2_ACCOUNT_ID ||
+        process.env.CLOUDFLARE_ACCOUNT_ID ||
+        fileVars.CLOUDFLARE_ACCOUNT_ID ||
+        ''
+      ).trim() || undefined,
+    CLOUDFLARE_R2_ACCESS_KEY_ID:
+      (process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || fileVars.CLOUDFLARE_R2_ACCESS_KEY_ID || '').trim() ||
+      undefined,
+    CLOUDFLARE_R2_SECRET_ACCESS_KEY:
+      (
+        process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY ||
+        fileVars.CLOUDFLARE_R2_SECRET_ACCESS_KEY ||
+        ''
+      ).trim() || undefined,
+    CLOUDFLARE_R2_BUCKET_NAME:
+      (process.env.CLOUDFLARE_R2_BUCKET_NAME || fileVars.CLOUDFLARE_R2_BUCKET_NAME || '').trim() ||
+      undefined,
+    CLOUDFLARE_R2_PUBLIC_URL:
+      (process.env.CLOUDFLARE_R2_PUBLIC_URL || fileVars.CLOUDFLARE_R2_PUBLIC_URL || '').trim() ||
+      undefined,
   };
 }
 
@@ -227,28 +307,39 @@ export const SYSTEM_PROMPT_IDENTIFICACION_BIOMA_AR = `
 Sos un biólogo naturalista de campo experto en la biodiversidad urbana, de jardín y silvestre de la República Argentina y Sudamérica, asistiendo a una observadora en «Bioma», su cuaderno vivo de jardín y naturaleza.
 
 GRUPOS QUE IDENTIFICÁS (clasificá cada candidata en exactamente uno de estos valores en "organismGroup"):
-- "aves": pájaros y aves de jardín, parque, costa o campo (hornero, chingolo, ratona, zorzal, picaflor, benteveo, etc.).
-- "mariposas": mariposas diurnas, polillas, polillas colibrí y orugas (monarca, espejitos, limoncito, bandera argentina, dama pintada, etc.).
-- "abejas_abejorros": abejas melíferas, abejas nativas sin aguijón (yateí), abejas solitarias/metálicas y abejorros/mangangás (Xylocopa, Bombus, Apis, Megachile, Augochlora, etc.).
-- "insectos_aracnidos": otros insectos, arañas y pequeños artrópodos que conviven en el jardín (vaquitas de San Antonio, mamboretá/mantis, libélulas/alguaciles, escarabajos/toritos, chicharras, hormigas, avispas, grillos, arañas tejedoras o saltarinas, bichos bolita, etc.).
-- "fauna_vecina": animales vecinos que nos visitan o viven inadvertidos en el jardín (lagartijas, lagartos overos, gekos/salamanquesas, sapos, ranas, comadrejas, cuises, murciélagos, caracoles, babosas, tortugas, etc.).
+- "aves": pájaros y aves de jardín, parque, costa o campo.
+- "mariposas": mariposas diurnas, polillas, esfinges y orugas (Lepidoptera).
+- "abejas_abejorros": abejas melíferas, abejas nativas sin aguijón, abejas solitarias/metálicas y abejorros/mangangás (Anthophila).
+- "insectos_aracnidos": otros insectos, arañas y pequeños artrópodos del jardín (coleópteros, mantis, libélulas, avispas, hormigas, chicharras, arañas, bichos bolita, etc.).
+- "fauna_vecina": otros animales vecinos del jardín (lagartijas, lagartos, gekos, sapos, ranas, comadrejas, cuises, murciélagos, caracoles, babosas, tortugas, etc.).
 
-REGLAS CRÍTICAS DE PRECISIÓN NATURALISTA:
-1. Observá cuidadosamente CADA rasgo anatómico real presente en la fotografía:
-   - En aves: postura, forma exacta del pico, patrón de alas/cola, ceja/collar.
-   - En mariposas: color, venación, manchas u ocelos en cara dorsal/ventral, forma de alas y antenas.
-   - En abejas/abejorros e insectos: vellosidad, bandas de color, forma del abdomen, alas, antenas, patas (ej. diferenciá claramente una abeja/abejorro de una avispa o de una mosca sírfida imitadora!).
-   - En arañas y fauna vecina: forma del cuerpo, ojos, patrones dorsales, piel/escamas/caparazón.
-2. NUNCA adivines ni devuelvas una especie genérica por defecto.
-3. Calibrá la incertidumbre con honestidad:
+PROTOCOLO VISUAL ESTRICTO (PASO OBLIGATORIO ANTES DE IDENTIFICAR):
+1. Primero completá "visualObservation" describiendo de manera fría, literal y objetiva ÚNICAMENTE lo que se ve en los píxeles de la foto:
+   - Colores dominantes exactos y patrón (bandas, manchas, lunares, líneas, reflejos).
+   - Anatomía diagnóstica visible:
+     * En mariposas: color de fondo de alas, bandas o manchas, presencia o ausencia de colas largas posteriores (Papilionidae / cola de golondrina), ocelos, antenas, cara dorsal vs ventral.
+     * En aves: forma exacta del pico (fino insectívoro vs cónico semillero vs curvo), postura, ceja, collar, patrón de alas/cola.
+     * En abejas/abejorros e insectos: vellosidad, bandas, forma del abdomen, alas, patas (diferenciá claramente abeja/abejorro de avispa o mosca sírfida).
+     * En arañas y fauna vecina: forma del cuerpo, patas, escamas, piel o caparazón.
+2. REGLA DE COHERENCIA CROMÁTICA Y MORFOLÓGICA ABSOLUTA:
+   - JAMÁS propongas una especie cuya coloración o morfología real contradiga "visualObservation".
+   - Ejemplo crítico: si la mariposa de la foto es NEGRA con bandas/manchas AMARILLAS y colas largas posteriores, NUNCA propongas una especie celeste/blanca sin colas como Morpho epistrophus; evaluá papiliónidos reales de Argentina como Heraclides thoas (Mariposa limonera / cola de golondrina), Heraclides astyalus o Papilio scamander.
+   - Si dudás entre 2 especies hermanas muy parecidas de la misma familia/género, mantené la coherencia visual y ofrecé esas 2–3 especies cercanas reales ordenadas por probabilidad.
+3. NUNCA adivines ni devuelvas una especie genérica por defecto.
+4. Calibrá la incertidumbre con honestidad:
    - "alta": el ejemplar se distingue nítidamente y sus rasgos diagnósticos permiten identificar la especie (o género si la especie exacta requiere lupa/microscopio, aclarando esto en el razonamiento). Incluí 1 o 2 especies visualmente cercanas de Argentina como alternativas de comparación cuando ayude a verificar.
    - "media": la foto está lejana, a contraluz, parcial o existen 2–3 especies muy parecidas. Explicá concretamente qué rasgo cuesta ver en "uncertaintyReason" y ofrecé 2 o 3 candidatas reales ordenadas por probabilidad.
    - "insuficiente": no se distingue ningún animal, insecto, mariposa ni ave en la fotografía, o está demasiado borrosa/oculta para identificarla con responsabilidad. Devolvé proposedScientificName = null y explicá el motivo.
-4. Usá SIEMPRE nombres comunes en español de Argentina (rioplatense: ej. "Mangangá negro", "Mariposa espejitos", "Vaquita de San Antonio", "Mamboretá", "Ratona común", "Geko casero", "Comadreja overa") y nombres científicos oficiales (iNaturalist / Clements). En alternativeNames incluí apodos locales frecuentes.
-5. Completá SIEMPRE el valor ecológico y de convivencia para el jardín en tono cercano, sereno y educativo:
-   - ecologicalRole: 1 frase muy corta (ej. "Polinizador nativo clave de flores del jardín", "Controladora natural de pulgones", "Cazador nocturno de mosquitos").
-   - coexistenceNote: 1 oración clara sobre convivencia en casa/jardín (si es totalmente inofensiva/beneficiosa, o con calma y sin alarmismo si puede picar/morder si se la molesta o requiere distancia respetuosa).
-6. Redactá todos los textos de ficha de forma BREVE y cómoda para celular:
+5. Usá SIEMPRE nombres comunes en español de Argentina (rioplatense) y nombres científicos oficiales vigentes (iNaturalist / Clements). En alternativeNames incluí apodos locales frecuentes.
+6. Completá SIEMPRE el valor ecológico, la convivencia y la ECOLOGÍA DE JARDÍN ("gardenEcology") en tono cercano, práctico y específico para jardines de Argentina:
+   - ecologicalRole: 1 frase muy corta (ej. "Polinizadora diurna de flores y cítricos").
+   - coexistenceNote: 1 oración clara sobre convivencia en casa/jardín.
+   - gardenEcology (MUY VALIOSO para la usuaria):
+     * seeksInGarden: qué viene a buscar exactamente al jardín (néctar, frutas maduras, plantas hospederas para orugas, cazar mosquitos/pulgones, agua, refugio).
+     * preferredFlowers: flores y plantas concretas de jardín argentino que visita (ej. lantanas, salvias, lavandas, mburucuyá, asclepias, jazmines, rosales, romero).
+     * preferredFruitTrees: árboles frutales o nativos concretos que busca (ej. limonero, naranjo, higuera, níspero, morera, ciruelo, coronillo, ceibo; si no depende de frutales, aclararlo con claridad).
+     * insectsOrFoodEaten: qué insectos, presas o alimentos concretos consume (ej. pulgones, mosquitos, lombrices, o aclarar si no come insectos y liba néctar / come frutas / hojas de cítricos en etapa de oruga).
+7. Redactá todos los textos de ficha de forma BREVE, precisa y cómoda para celular:
    - quickSummary: 1 oración concisa (máximo 115 caracteres) con el rasgo visual más útil.
    - identificationTraits, typicalBehavior, dietAndHabitat, generalDistribution: 1 a 2 oraciones cortas cada uno.
    - keyVisibleTraits: 3 a 4 puntos visuales concretos para verificar mirando la foto.
@@ -300,7 +391,7 @@ export function inferServerOrganismGroup(meta: {
   }
 
   if (
-    /\b(mariposas?|polillas?|orugas?|esfinges?|lepidoptera|nymphalidae|pieridae|papilionidae|hesperiidae|lycaenidae|sphingidae|saturniidae|danaus|agraulis|morpho|vanessa|junonia|eurema|ascia|aellopos|heliconius|papilio|phoebis|pieris|colias|dryas)\b/.test(
+    /\b(mariposas?|polillas?|orugas?|esfinges?|lepidoptera|nymphalidae|pieridae|papilionidae|hesperiidae|lycaenidae|sphingidae|saturniidae|danaus|agraulis|morpho|vanessa|junonia|eurema|ascia|aellopos|heliconius|papilio|heraclides|battus|phoebis|pieris|colias|dryas)\b/.test(
       combined
     )
   ) {
@@ -398,33 +489,33 @@ export function buildNaturalistIllustrationPrompt(params: {
 
   if (params.style === 'muralismo_fauna') {
     return [
-      `Contemporary South American native wildlife and biodiversity muralism painting of ${params.scientificName} (${params.commonNameAr}, ${taxonContext}).`,
-      `Strict anatomical and color accuracy: ${params.identificationTraits}.`,
+      `Masterpiece contemporary South American native wildlife muralism painting of ${params.scientificName} (${params.commonNameAr}, ${taxonContext}), inspired by Argentine botanical biodiversity murals.`,
+      `Strict species-accurate anatomy, proportions, and natural color markings: ${params.identificationTraits}.`,
       poseHint,
-      `Expressive large-scale acrylic and fine mural brushwork painted on a subtly textured warm mineral lime-plaster wall (#EFE7D8), framed with stylized native South American botanical foliage, warm sunlit ochre solar halo, deep teal-forest shadows, terracotta and emerald natural pigments.`,
-      `Bold graphic painterly planes, crisp expressive dark-charcoal contours, luminous gallery-quality Argentine nature muralism aesthetic — NO raw photograph, NO camera bokeh, NO brick grid.`,
-      `Square 1:1 composition with balanced margins. Strictly NO text, NO typography, NO graffiti tags, NO Latin names, NO labels, NO frames, NO signatures, NO watermarks.`,
+      `Expressive fine acrylic mural brushwork with layered matte mineral pigments, lush stylized native South American leaves and wildflowers gracefully framing the subject on a warm sun-kissed lime-plaster wall (#EFE7D8), subtle warm ochre solar halo, rich emerald, teal-forest, and terracotta accents.`,
+      `Bold artistic painterly planes, crisp dark-charcoal illustrative contours, luminous gallery-quality hand-painted muralism — strictly painted artwork, NO raw photograph, NO camera bokeh, NO brick grid, NO digital filter look.`,
+      `Square 1:1 editorial composition with balanced breathing margins. Strictly NO text, NO typography, NO graffiti tags, NO Latin names, NO labels, NO frames, NO signatures, NO watermarks.`,
     ].join(' ');
   }
 
   if (params.style === 'acuarela_naturalista') {
     return [
-      `Classic 19th-century ${discipline} watercolor illustration of ${params.scientificName} (${params.commonNameAr}, ${taxonContext}).`,
-      `Strict anatomical and color accuracy: ${params.identificationTraits}.`,
+      `Museum-grade 19th-century ${discipline} botanical watercolor plate of ${params.scientificName} (${params.commonNameAr}, ${taxonContext}), in the timeless tradition of John James Audubon and classic naturalist folios.`,
+      `Strict species-accurate anatomy, proportions, and exact natural coloration: ${params.identificationTraits}.`,
       poseHint,
-      `Isolated subject centered on a completely clean, empty, uncluttered warm ivory cotton watercolor paper background (#FAF6E9) — NO scenery, NO sky, NO forest background, NO photo bokeh.`,
-      `Fine hand-drawn dark sepia botanical ink outlines with delicate translucent watercolor washes, ${detailPhrase}, authentic vintage naturalist sketchbook plate.`,
-      `Square 1:1 composition with generous clean cream paper margins. Strictly NO text, NO typography, NO Latin names, NO labels, NO frames, NO signatures, NO watermarks.`,
+      `Isolated subject gracefully centered on completely clean, empty, unblemished warm ivory cold-press cotton watercolor paper (#FAF6E9) — NO scenery, NO sky, NO forest background, NO photo bokeh.`,
+      `Delicate luminous translucent watercolor washes, crisp hand-drawn dark sepia dip-pen ink outlines, ${detailPhrase}, subtle organic paper grain, authentic vintage naturalist field-plate artistry.`,
+      `Square 1:1 composition with generous clean ivory paper margins. Strictly NO text, NO typography, NO Latin names, NO labels, NO frames, NO signatures, NO watermarks.`,
     ].join(' ');
   }
 
   return [
-    `Classic 19th-century ${discipline} field-sketch illustration in graphite pencil (2B/4B) of ${params.scientificName} (${params.commonNameAr}, ${taxonContext}).`,
-    `Strict anatomical accuracy: ${params.identificationTraits}.`,
+    `Museum-grade 19th-century ${discipline} zoological study drawn in graphite pencil (2H, 2B, 4B) of ${params.scientificName} (${params.commonNameAr}, ${taxonContext}).`,
+    `Strict species-accurate anatomy, silhouette, and markings rendered in tonal values: ${params.identificationTraits}.`,
     poseHint,
-    `Isolated subject centered on a completely clean, empty warm cream archival sketchbook paper background (#F5F1E8) — NO scenery background, NO photo bokeh.`,
-    `Monochrome fine graphite pencil linework, delicate cross-hatching, realistic tonal shading.`,
-    `Square 1:1 composition with generous clean paper margins. Strictly NO text, NO typography, NO labels, NO frames, NO signatures, NO watermarks.`,
+    `Isolated subject centered on completely clean, empty warm cream archival sketchbook paper (#F5F1E8) — NO scenery background, NO photo bokeh, NO color washes.`,
+    `Strictly monochrome graphite pencil drawing with delicate fine cross-hatching, luminous soft pencil shading, sharp anatomical contour lines, authentic naturalist sketchbook illustration.`,
+    `Square 1:1 composition with generous clean archival paper margins. Strictly NO text, NO typography, NO labels, NO frames, NO signatures, NO watermarks.`,
   ].join(' ');
 }
 
@@ -646,7 +737,19 @@ export async function searchINaturalistBirds(query: string): Promise<BirdReferen
   }
 }
 
+interface ServerGardenEcology {
+  seeksInGarden: string;
+  preferredFlowers: string;
+  preferredFruitTrees: string;
+  insectsOrFoodEaten: string;
+}
+
 interface GeminiRawIdentification {
+  visualObservation?: {
+    dominantColors?: string;
+    distinctiveAnatomy?: string;
+    bodyFormAndGroup?: string;
+  };
   confidenceLevel: 'alta' | 'media' | 'insuficiente';
   explanation: string;
   uncertaintyReason: string | null;
@@ -666,6 +769,7 @@ interface GeminiRawIdentification {
     dietTag?: string;
     ecologicalRole?: string;
     coexistenceNote?: string;
+    gardenEcology?: ServerGardenEcology;
     identificationTraits?: string;
     typicalBehavior?: string;
     dietAndHabitat?: string;
@@ -676,13 +780,23 @@ interface GeminiRawIdentification {
 const IDENTIFICATION_RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
+    visualObservation: {
+      type: 'OBJECT',
+      description: 'Descripción objetiva previa de los colores, patrón y anatomía visibles en la foto ANTES de nombrar la especie.',
+      properties: {
+        dominantColors: { type: 'STRING' },
+        distinctiveAnatomy: { type: 'STRING' },
+        bodyFormAndGroup: { type: 'STRING' },
+      },
+      required: ['dominantColors', 'distinctiveAnatomy', 'bodyFormAndGroup'],
+    },
     confidenceLevel: {
       type: 'STRING',
       enum: ['alta', 'media', 'insuficiente'],
     },
     explanation: {
       type: 'STRING',
-      description: 'Resumen claro y breve en español rioplatense (1-2 oraciones).',
+      description: 'Resumen claro y breve en español rioplatense (1-2 oraciones) coherente con visualObservation.',
     },
     uncertaintyReason: {
       type: 'STRING',
@@ -719,6 +833,16 @@ const IDENTIFICATION_RESPONSE_SCHEMA = {
           dietTag: { type: 'STRING' },
           ecologicalRole: { type: 'STRING' },
           coexistenceNote: { type: 'STRING' },
+          gardenEcology: {
+            type: 'OBJECT',
+            properties: {
+              seeksInGarden: { type: 'STRING' },
+              preferredFlowers: { type: 'STRING' },
+              preferredFruitTrees: { type: 'STRING' },
+              insectsOrFoodEaten: { type: 'STRING' },
+            },
+            required: ['seeksInGarden', 'preferredFlowers', 'preferredFruitTrees', 'insectsOrFoodEaten'],
+          },
           identificationTraits: { type: 'STRING' },
           typicalBehavior: { type: 'STRING' },
           dietAndHabitat: { type: 'STRING' },
@@ -733,11 +857,12 @@ const IDENTIFICATION_RESPONSE_SCHEMA = {
           'keyVisibleTraits',
           'quickSummary',
           'ecologicalRole',
+          'gardenEcology',
         ],
       },
     },
   },
-  required: ['confidenceLevel', 'explanation', 'candidates'],
+  required: ['visualObservation', 'confidenceLevel', 'explanation', 'candidates'],
 };
 
 function extractIdentificationJson(rawText: string): GeminiRawIdentification | null {
@@ -787,6 +912,11 @@ function extractIdentificationJson(rawText: string): GeminiRawIdentification | n
 const COMPACT_JSON_FORMAT_INSTRUCTIONS = `
 Respondé ÚNICAMENTE con un objeto JSON válido (sin texto ni markdown alrededor) con esta estructura exacta:
 {
+  "visualObservation": {
+    "dominantColors": "Colores exactos y patrones visibles en la fotografía",
+    "distinctiveAnatomy": "Alas, colas, pico, patas, antenas o rasgos concretos visibles",
+    "bodyFormAndGroup": "Forma corporal y grupo taxonómico observado"
+  },
   "confidenceLevel": "alta" | "media" | "insuficiente",
   "explanation": "1-2 oraciones en español rioplatense",
   "uncertaintyReason": null | "motivo breve si es media o insuficiente",
@@ -807,6 +937,12 @@ Respondé ÚNICAMENTE con un objeto JSON válido (sin texto ni markdown alrededo
       "dietTag": "Dieta breve",
       "ecologicalRole": "Rol ecológico en el jardín",
       "coexistenceNote": "Nota serena de convivencia",
+      "gardenEcology": {
+        "seeksInGarden": "Qué viene a buscar al jardín",
+        "preferredFlowers": "Flores y plantas que visita",
+        "preferredFruitTrees": "Árboles frutales o nativos que busca",
+        "insectsOrFoodEaten": "Qué insectos o alimentos concretos come"
+      },
       "identificationTraits": "Rasgos clave",
       "typicalBehavior": "Comportamiento típico",
       "dietAndHabitat": "Alimentación y hábitat",
@@ -840,8 +976,8 @@ async function identifyWithOpenAiCompatibleVision(params: {
         },
         body: JSON.stringify({
           model,
-          temperature: 0.2,
-          max_tokens: 1800,
+          temperature: 0.0,
+          max_tokens: 2400,
           messages: [
             {
               role: 'system',
@@ -941,10 +1077,11 @@ export async function identifyBirdWithGemini(
   let sawQuota429 = false;
   const attemptErrors: string[] = [];
 
-  // 1. Google Gemini 3.x / Gemma 4 (priorizando flash-lite estables + wave hedged ante picos 503)
+  // 1. Google Gemini 3.x / Gemma 4 (priorizando gemini-3-flash-preview + cooldown inteligente ante 503/429)
   if (env.GEMINI_API_KEY) {
+    const nowMs = Date.now();
     const cachedHealthy =
-      lastWorkingVisionModel && lastWorkingVisionModel.expiresAt > Date.now()
+      lastWorkingVisionModel && lastWorkingVisionModel.expiresAt > nowMs
         ? lastWorkingVisionModel.model
         : null;
 
@@ -953,7 +1090,7 @@ export async function identifyBirdWithGemini(
         ? env.GEMINI_VISION_MODEL
         : null;
 
-    const rawModels = Array.from(
+    const allEligibleModels = Array.from(
       new Set(
         [cachedHealthy, configuredModel, ...DEFAULT_VISION_MODELS].filter(
           (m): m is string =>
@@ -964,6 +1101,15 @@ export async function identifyBirdWithGemini(
       )
     );
 
+    // Preferir modelos que no estén en enfriamiento reciente (503/429); si todos están enfriados, intentar igualmente en orden
+    const freshModels = allEligibleModels.filter(
+      (m) => (visionModelCooldownUntil.get(m) || 0) <= nowMs
+    );
+    const cooledModels = allEligibleModels.filter(
+      (m) => (visionModelCooldownUntil.get(m) || 0) > nowMs
+    );
+    const rawModels = freshModels.length > 0 ? [...freshModels, ...cooledModels] : allEligibleModels;
+
     const tryGeminiModel = async (
       model: string,
       timeoutMs: number,
@@ -973,6 +1119,7 @@ export async function identifyBirdWithGemini(
         model
       )}:generateContent`;
       const isGemma = /^gemma-/i.test(model);
+      const supportsThinkingLevel = /^gemini-3(\.\d+)?-flash(-preview)?$/i.test(model);
 
       const requestBody = isGemma
         ? {
@@ -993,8 +1140,8 @@ export async function identifyBirdWithGemini(
               },
             ],
             generationConfig: {
-              temperature: 0.2,
-              maxOutputTokens: 2048,
+              temperature: 0.0,
+              maxOutputTokens: 3072,
             },
           }
         : {
@@ -1016,10 +1163,11 @@ export async function identifyBirdWithGemini(
               },
             ],
             generationConfig: {
-              temperature: 0.2,
+              temperature: 0.0,
               responseMimeType: 'application/json',
               responseSchema: IDENTIFICATION_RESPONSE_SCHEMA,
-              maxOutputTokens: 2048,
+              maxOutputTokens: 3072,
+              ...(supportsThinkingLevel ? { thinkingConfig: { thinkingLevel: 'low' } } : {}),
             },
           };
 
@@ -1045,8 +1193,16 @@ export async function identifyBirdWithGemini(
             deprecatedVisionModels.add(model);
           } else if (response.status === 503) {
             sawHighDemand503 = true;
+            visionModelCooldownUntil.set(model, Date.now() + HIGH_DEMAND_COOLDOWN_MS);
+            if (lastWorkingVisionModel?.model === model) {
+              lastWorkingVisionModel = null;
+            }
           } else if (response.status === 429) {
             sawQuota429 = true;
+            visionModelCooldownUntil.set(model, Date.now() + QUOTA_COOLDOWN_MS);
+            if (lastWorkingVisionModel?.model === model) {
+              lastWorkingVisionModel = null;
+            }
           }
           attemptErrors.push(`${model} (${response.status})`);
           if (response.status === 401 || response.status === 403) {
@@ -1071,6 +1227,7 @@ export async function identifyBirdWithGemini(
 
         const extracted = extractIdentificationJson(rawText);
         if (extracted) {
+          visionModelCooldownUntil.delete(model);
           lastWorkingVisionModel = { model, expiresAt: Date.now() + WORKING_MODEL_TTL_MS };
           return {
             parsed: extracted,
@@ -1087,6 +1244,7 @@ export async function identifyBirdWithGemini(
         if (externalSignal?.aborted) {
           return null;
         }
+        visionModelCooldownUntil.set(model, Date.now() + HIGH_DEMAND_COOLDOWN_MS);
         attemptErrors.push(`${model} (timeout/red)`);
         return null;
       }
@@ -1126,9 +1284,9 @@ export async function identifyBirdWithGemini(
       }
     };
 
-    // Etapa 1: 1 intento rápido al modelo más saludable (2–5s en condiciones normales, sin desperdiciar cuota)
+    // Etapa 1: 1 intento rápido al modelo más preciso y saludable (gemini-3-flash-preview ~4-6s)
     if (rawModels[0]) {
-      const firstHit = await tryGeminiModel(rawModels[0], 11000);
+      const firstHit = await tryGeminiModel(rawModels[0], 22000);
       if (firstHit) {
         parsedResult = firstHit.parsed;
         usedModel = firstHit.usedModel;
@@ -1136,9 +1294,9 @@ export async function identifyBirdWithGemini(
       }
     }
 
-    // Etapa 2: si el primero falló (503/timeout), lanzar ola paralela hedged de los 2 siguientes flash-lite
+    // Etapa 2: si el primero falló (503/timeout), lanzar ola paralela hedged de los 2 siguientes modelos distintos
     if (!parsedResult && rawModels.length > 1) {
-      const wave2Hit = await raceGeminiWave(rawModels.slice(1, 3), 12000);
+      const wave2Hit = await raceGeminiWave(rawModels.slice(1, 3), 20000);
       if (wave2Hit) {
         parsedResult = wave2Hit.parsed;
         usedModel = wave2Hit.usedModel;
@@ -1146,13 +1304,9 @@ export async function identifyBirdWithGemini(
       }
     }
 
-    // Etapa 3: si no hay Groq/OpenRouter configurado y hubo pico 503, esperar 900ms y lanzar ola de recuperación
-    if (!parsedResult && !env.GROQ_API_KEY && !env.OPENROUTER_API_KEY) {
-      await new Promise((r) => setTimeout(r, 900));
-      const recoveryModels = [rawModels[0], rawModels[4] || rawModels[3] || rawModels[1]].filter(
-        Boolean
-      );
-      const wave3Hit = await raceGeminiWave(recoveryModels, 12000);
+    // Etapa 3: si aún no respondió, lanzar ola paralela con los siguientes modelos no probados (nunca re-martillar un 503 recién fallado)
+    if (!parsedResult && rawModels.length > 3) {
+      const wave3Hit = await raceGeminiWave(rawModels.slice(3, 6), 20000);
       if (wave3Hit) {
         parsedResult = wave3Hit.parsed;
         usedModel = wave3Hit.usedModel;
@@ -1262,6 +1416,14 @@ export async function identifyBirdWithGemini(
         dietTag: cand.dietTag,
         ecologicalRole: cand.ecologicalRole || '',
         coexistenceNote: cand.coexistenceNote || '',
+        gardenEcology: cand.gardenEcology
+          ? {
+              seeksInGarden: cand.gardenEcology.seeksInGarden || '',
+              preferredFlowers: cand.gardenEcology.preferredFlowers || '',
+              preferredFruitTrees: cand.gardenEcology.preferredFruitTrees || '',
+              insectsOrFoodEaten: cand.gardenEcology.insectsOrFoodEaten || '',
+            }
+          : undefined,
         identificationTraits: cand.identificationTraits || cand.quickSummary || cand.reasoning,
         typicalBehavior: cand.typicalBehavior || '',
         dietAndHabitat: cand.dietAndHabitat || '',
@@ -1325,6 +1487,28 @@ function buildStyleVariationNote(
   return 'Apunte de campo original en lápiz grafito 2B/4B';
 }
 
+async function fetchSpeciesReferenceInlineImage(
+  scientificName: string
+): Promise<{ mimeType: string; base64Data: string } | null> {
+  try {
+    const ref = await fetchINaturalistPhotosForSpecies(scientificName);
+    const refUrl = ref?.referencePhotos?.[0]?.thumbUrl || ref?.referencePhotos?.[0]?.url;
+    if (!refUrl || !isAllowedImageProxyUrl(refUrl)) return null;
+    const res = await serverFetch(refUrl, {
+      headers: { 'User-Agent': 'BiomaCuadernoVivo/1.0' },
+      signal: AbortSignal.timeout(5500),
+    });
+    if (!res.ok) return null;
+    const ct = (res.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+    if (!ct.startsWith('image/')) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0 || buf.length > 3 * 1024 * 1024) return null;
+    return { mimeType: ct, base64Data: buf.toString('base64') };
+  } catch {
+    return null;
+  }
+}
+
 export async function generateNaturalistPlateWithGemini(
   params: {
     commonNameAr: string;
@@ -1344,11 +1528,35 @@ export async function generateNaturalistPlateWithGemini(
   let lastError = '';
   let sawGeminiQuotaError = false;
 
-  // 1. Google Gemini native image generation
-  if (env.GEMINI_API_KEY) {
+  // 1. Google Gemini native image generation (con referencia visual de iNaturalist para máxima fidelidad anatómica)
+  //    Si Gemini devolvió 429 (Free Tier sin facturación) en los últimos 10 min y existe Cloudflare/HF/OpenAI, saltar directo
+  const hasSecondaryImageProvider = Boolean(
+    (env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN) ||
+      env.HUGGINGFACE_API_KEY ||
+      env.OPENAI_API_KEY
+  );
+  const skipGeminiDueToCooldown =
+    hasSecondaryImageProvider && geminiImageQuotaCooldownUntil > Date.now();
+
+  if (env.GEMINI_API_KEY && !skipGeminiDueToCooldown) {
+    const refInline = await fetchSpeciesReferenceInlineImage(params.scientificName);
     const modelsToTry = Array.from(
       new Set([env.GEMINI_IMAGE_MODEL, ...DEFAULT_IMAGE_MODELS].filter(Boolean) as string[])
     );
+
+    const geminiParts: Array<Record<string, unknown>> = refInline
+      ? [
+          {
+            text: `${prompt} Use the attached reference photo strictly as an anatomical and color-marking guide for ${params.scientificName} (${params.commonNameAr}); completely re-illustrate the subject from scratch in the requested hand-painted artistic medium on the clean artistic background, NEVER keeping any photo background or camera look.`,
+          },
+          {
+            inlineData: {
+              mimeType: refInline.mimeType,
+              data: refInline.base64Data,
+            },
+          },
+        ]
+      : [{ text: prompt }];
 
     for (const model of modelsToTry) {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
@@ -1366,7 +1574,7 @@ export async function generateNaturalistPlateWithGemini(
             contents: [
               {
                 role: 'user',
-                parts: [{ text: prompt }],
+                parts: geminiParts,
               },
             ],
             generationConfig: {
@@ -1380,8 +1588,13 @@ export async function generateNaturalistPlateWithGemini(
           const errBody = await response.text().catch(() => '');
           if (response.status === 429) {
             sawGeminiQuotaError = true;
+            geminiImageQuotaCooldownUntil = Date.now() + QUOTA_COOLDOWN_MS;
           }
           lastError = `${model} (${response.status}): ${errBody.slice(0, 220)}`;
+          if (response.status === 429 && hasSecondaryImageProvider) {
+            // Saltar directo a Cloudflare Workers AI / Hugging Face / OpenAI sin perder segundos en más 429 de Gemini Free Tier
+            break;
+          }
           if ([400, 404, 429, 503].includes(response.status)) {
             continue;
           }
@@ -1403,6 +1616,7 @@ export async function generateNaturalistPlateWithGemini(
         for (const part of parts) {
           const inline = part.inlineData || part.inline_data;
           if (inline?.data) {
+            geminiImageQuotaCooldownUntil = 0;
             const mime =
               ('mimeType' in inline && inline.mimeType) ||
               ('mime_type' in inline && inline.mime_type) ||
@@ -1421,43 +1635,69 @@ export async function generateNaturalistPlateWithGemini(
     }
   }
 
-  // 2. Respaldo gratuito sin marca de agua: Cloudflare Workers AI (FLUX.1-schnell)
+  // 2. Cloudflare Workers AI — FLUX.1-schnell (capa gratuita diaria 10.000 neuronas/día, sin marca de agua)
   if (env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN) {
-    try {
-      const cfUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(
-        env.CLOUDFLARE_ACCOUNT_ID
-      )}/ai/run/@cf/black-forest-labs/flux-1-schnell`;
-      const cfRes = await serverFetch(cfUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ prompt, steps: 6 }),
-        signal: AbortSignal.timeout(35000),
-      });
-      if (cfRes.ok) {
-        const cfJson = (await cfRes.json()) as { result?: { image?: string } };
-        if (cfJson.result?.image) {
-          return {
-            imageUrl: `data:image/jpeg;base64,${cfJson.result.image}`,
-            modelProvider: 'Cloudflare Workers AI (FLUX.1-schnell)',
-            variationNote: buildStyleVariationNote(params.style, params.version, 'IA'),
-          };
+    const cfModels = Array.from(
+      new Set(
+        [
+          env.CLOUDFLARE_IMAGE_MODEL,
+          '@cf/black-forest-labs/flux-1-schnell',
+          '@cf/leonardo/lucid-origin',
+        ].filter(Boolean) as string[]
+      )
+    );
+
+    for (const cfModel of cfModels) {
+      try {
+        const cfUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(
+          env.CLOUDFLARE_ACCOUNT_ID
+        )}/ai/run/${cfModel}`;
+        const cfBody = cfModel.includes('flux-1-schnell')
+          ? { prompt, steps: 8 }
+          : { prompt, width: 1024, height: 1024 };
+
+        const cfRes = await serverFetch(cfUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(cfBody),
+          signal: AbortSignal.timeout(45000),
+        });
+        if (cfRes.ok) {
+          const ct = cfRes.headers.get('content-type') || '';
+          if (ct.startsWith('image/')) {
+            const buf = Buffer.from(await cfRes.arrayBuffer());
+            return {
+              imageUrl: `data:${ct.split(';')[0]};base64,${buf.toString('base64')}`,
+              modelProvider: `Cloudflare Workers AI (${cfModel.split('/').pop()})`,
+              variationNote: buildStyleVariationNote(params.style, params.version, 'IA'),
+            };
+          }
+          const cfJson = (await cfRes.json()) as { result?: { image?: string } };
+          if (cfJson.result?.image) {
+            return {
+              imageUrl: `data:image/jpeg;base64,${cfJson.result.image}`,
+              modelProvider: `Cloudflare Workers AI (${cfModel.split('/').pop()})`,
+              variationNote: buildStyleVariationNote(params.style, params.version, 'IA'),
+            };
+          }
+        } else {
+          lastError = `Cloudflare AI ${cfModel} (${cfRes.status}): ${(await cfRes.text().catch(() => '')).slice(0, 180)}`;
         }
-      } else {
-        lastError = `Cloudflare AI (${cfRes.status}): ${(await cfRes.text().catch(() => '')).slice(0, 180)}`;
+      } catch (err) {
+        lastError = `Cloudflare AI ${cfModel}: ${err instanceof Error ? err.message : 'error'}`;
       }
-    } catch (err) {
-      lastError = `Cloudflare AI: ${err instanceof Error ? err.message : 'error'}`;
     }
   }
 
-  // 3. Respaldo gratuito sin tarjeta ni marca de agua: Hugging Face Inference (FLUX.1-schnell)
+  // 3. Hugging Face Inference Router (FLUX.1-schnell 1024×1024, sin marca de agua)
   if (env.HUGGINGFACE_API_KEY) {
+    const hfModel = env.HUGGINGFACE_IMAGE_MODEL || 'black-forest-labs/FLUX.1-schnell';
     try {
       const hfRes = await serverFetch(
-        'https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell',
+        `https://router.huggingface.co/hf-inference/models/${hfModel}`,
         {
           method: 'POST',
           headers: {
@@ -1468,12 +1708,12 @@ export async function generateNaturalistPlateWithGemini(
           body: JSON.stringify({
             inputs: prompt,
             parameters: {
-              width: 768,
-              height: 768,
+              width: 1024,
+              height: 1024,
               num_inference_steps: 4,
             },
           }),
-          signal: AbortSignal.timeout(40000),
+          signal: AbortSignal.timeout(45000),
         }
       );
       if (hfRes.ok) {
@@ -1481,8 +1721,8 @@ export async function generateNaturalistPlateWithGemini(
         if (ct.startsWith('image/')) {
           const buf = Buffer.from(await hfRes.arrayBuffer());
           return {
-            imageUrl: `data:${ct};base64,${buf.toString('base64')}`,
-            modelProvider: 'Hugging Face (FLUX.1-schnell)',
+            imageUrl: `data:${ct.split(';')[0]};base64,${buf.toString('base64')}`,
+            modelProvider: `Hugging Face (${hfModel.split('/').pop()})`,
             variationNote: buildStyleVariationNote(params.style, params.version, 'IA'),
           };
         }
@@ -1494,10 +1734,46 @@ export async function generateNaturalistPlateWithGemini(
     }
   }
 
+  // 4. OpenAI Images API (gpt-image-1, opcional si se configuró OPENAI_API_KEY)
+  if (env.OPENAI_API_KEY) {
+    try {
+      const oaRes = await serverFetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-image-1',
+          prompt,
+          size: '1024x1024',
+          quality: 'medium',
+          output_format: 'jpeg',
+        }),
+        signal: AbortSignal.timeout(55000),
+      });
+      if (oaRes.ok) {
+        const oaJson = (await oaRes.json()) as { data?: Array<{ b64_json?: string; url?: string }> };
+        const b64 = oaJson.data?.[0]?.b64_json;
+        if (b64) {
+          return {
+            imageUrl: `data:image/jpeg;base64,${b64}`,
+            modelProvider: 'OpenAI (gpt-image-1)',
+            variationNote: buildStyleVariationNote(params.style, params.version, 'OpenAI'),
+          };
+        }
+      } else {
+        lastError = `OpenAI Images (${oaRes.status}): ${(await oaRes.text().catch(() => '')).slice(0, 180)}`;
+      }
+    } catch (err) {
+      lastError = `OpenAI Images: ${err instanceof Error ? err.message : 'error'}`;
+    }
+  }
+
   if (sawGeminiQuotaError) {
     throw new Error(`GEMINI_IMAGE_QUOTA_EXCEEDED: ${lastError}`);
   }
-  if (!env.GEMINI_API_KEY && !env.HUGGINGFACE_API_KEY && !env.CLOUDFLARE_API_TOKEN) {
+  if (!env.GEMINI_API_KEY && !hasSecondaryImageProvider) {
     throw new Error('GEMINI_API_KEY_MISSING');
   }
   throw new Error(`GEMINI_IMAGE_FAILED: ${lastError}`);

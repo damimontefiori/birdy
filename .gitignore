@@ -7,3 +7,6 @@ dist/
 *.log
 .DS_Store
 .vscode/
+secrets/
+*firebase-adminsdk*.json
+*service-account*.json

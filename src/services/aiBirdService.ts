@@ -18,9 +18,7 @@ import {
 } from '../types/domain';
 import {
   fetchReferencePhotosForSpecies,
-  getProxiedImageUrl,
 } from './speciesReferenceService';
-import { renderBotanicalPlateFromImage } from './watercolorCanvasRenderer';
 
 export interface IdentificationRequest {
   photoSha256: string;
@@ -63,6 +61,13 @@ export interface BackendAiHealth {
   provider: string;
   visionModel?: string;
   imageModel?: string;
+  cloudStorage?: {
+    firestoreConfigured: boolean;
+    r2BucketConfigured: boolean;
+    r2PublicUrlConfigured: boolean;
+    firestoreProjectId?: string | null;
+    r2BucketName?: string | null;
+  };
   auth?: {
     googleAuthConfigured: boolean;
     authRequired: boolean;
@@ -162,6 +167,7 @@ function normalizeAndRegisterCandidate(raw: AICandidate): AICandidate {
       dietTag: existing.dietTag || raw.dietTag,
       ecologicalRole: existing.ecologicalRole || raw.ecologicalRole,
       coexistenceNote: existing.coexistenceNote || raw.coexistenceNote,
+      gardenEcology: existing.gardenEcology || raw.gardenEcology,
       referencePhotos: updated.referencePhotos || raw.referencePhotos,
       wikipediaUrl: updated.wikipediaUrl || raw.wikipediaUrl,
     };
@@ -187,6 +193,7 @@ function normalizeAndRegisterCandidate(raw: AICandidate): AICandidate {
     dietTag: raw.dietTag,
     ecologicalRole: raw.ecologicalRole,
     coexistenceNote: raw.coexistenceNote,
+    gardenEcology: raw.gardenEcology,
     identificationTraits: raw.identificationTraits || raw.quickSummary || raw.reasoning,
     typicalBehavior: raw.typicalBehavior || 'Observación registrada mediante identificación asistida por IA.',
     dietAndHabitat: raw.dietAndHabitat || raw.habitatTag || 'Información disponible según región.',
@@ -205,10 +212,11 @@ function normalizeAndRegisterCandidate(raw: AICandidate): AICandidate {
 }
 
 /**
- * Crea una copia liviana (~70–130 KB, máx. 896px) exclusivamente para el envío a la IA de visión,
- * acelerando la subida desde 4G/móvil y evitando timeouts sin tocar la foto original guardada.
+ * Crea una copia optimizada (~150–230 KB, máx. 1280px @ 0.86) para el envío a la IA de visión,
+ * conservando detalles finos diagnósticos (colas de mariposa, venación, pico, barras en alas)
+ * sin perder velocidad en red móvil ni tocar la foto original guardada.
  */
-async function createCompactVisionDataUrl(sourceDataUrl: string, maxDim = 896): Promise<string> {
+async function createCompactVisionDataUrl(sourceDataUrl: string, maxDim = 1280): Promise<string> {
   if (
     typeof Image === 'undefined' ||
     typeof document === 'undefined' ||
@@ -240,7 +248,7 @@ async function createCompactVisionDataUrl(sourceDataUrl: string, maxDim = 896): 
           return;
         }
         ctx.drawImage(img, 0, 0, targetW, targetH);
-        resolve(canvas.toDataURL('image/jpeg', 0.78));
+        resolve(canvas.toDataURL('image/jpeg', 0.86));
       } catch {
         resolve(sourceDataUrl);
       }
@@ -293,7 +301,7 @@ export async function identifyBirdFromPhoto(
   // 2. Identificación real mediante backend seguro (/api/identify-bird -> Gemini 3.x + respaldos)
   if (!isTestEnvironment()) {
     try {
-      const compactVisionDataUrl = await createCompactVisionDataUrl(req.sanitizedPhotoDataUrl, 896);
+      const compactVisionDataUrl = await createCompactVisionDataUrl(req.sanitizedPhotoDataUrl, 1280);
       const postIdentify = () =>
         fetch(`${getApiBase()}/api/identify-bird`, {
           method: 'POST',
@@ -308,16 +316,23 @@ export async function identifyBirdFromPhoto(
           }),
         });
 
-      let res = await postIdentify();
+      let res: Response;
+      try {
+        res = await postIdentify();
+      } catch {
+        // Reintento silencioso si el servidor estaba despertando (cold start) o hubo un microcorte
+        await new Promise((r) => setTimeout(r, 2000));
+        res = await postIdentify();
+      }
 
-      // Reintento silencioso automático tras 1.6s si Google tuvo un pico momentáneo 503
-      if (res.status === 503) {
+      // Reintento silencioso automático tras 1.8s si Google tuvo un pico momentáneo 503 o 502 transitorio
+      if (res.status === 503 || res.status === 502) {
         const peek = (await res
           .clone()
           .json()
           .catch(() => ({}))) as { error?: string };
-        if (peek.error === 'GEMINI_HIGH_DEMAND') {
-          await new Promise((r) => setTimeout(r, 1600));
+        if (peek.error !== 'GEMINI_API_KEY_MISSING' && peek.error !== 'AUTH_NOT_CONFIGURED') {
+          await new Promise((r) => setTimeout(r, 1800));
           res = await postIdentify();
         }
       }
@@ -706,11 +721,13 @@ function buildCalibratedDemoResponse(
 }
 
 /**
- * Genera o reutiliza una lámina artística naturalista para una especie y estilo dados.
- * - Si ya existe una lámina para (taxonId, style) y no se pidió otra versión, la reutiliza.
- * - Intenta primero generación real por IA (Google Gemini) cuando corresponde;
- *   si no está configurada, usa la lámina dedicada de esa especie exacta o genera un estudio
- *   botánico en Canvas a partir de la foto real verificada de ESA misma especie (nunca de otra!).
+ * Genera o reutiliza una lámina artística naturalista generada 100% por IA para una especie y estilo dados.
+ * - Si ya existe una lámina IA válida para (taxonId, style) y no se pidió otra versión, la reutiliza.
+ * - NUNCA aplica filtros locales Canvas (Kuwahara/stickers) sobre fotos: todas las ilustraciones
+ *   nuevas se generan únicamente mediante modelos de Inteligencia Artificial en el servidor
+ *   (Google Gemini Imagen / Cloudflare Workers AI FLUX / Hugging Face FLUX / OpenAI).
+ * - Si todavía no hay un proveedor de imagen IA con cuota disponible, devuelve una lámina en estado
+ *   `isPendingAi: true` con aviso claro y botón de reintento sin degradar la calidad visual del cuaderno.
  */
 export async function generateOrReuseIllustration(params: {
   taxonId: string;
@@ -718,21 +735,23 @@ export async function generateOrReuseIllustration(params: {
   existingIllustrations: Illustration[];
   forceNewVersion?: boolean;
   fallbackPhotoDataUrl?: string;
-}): Promise<{ illustration: Illustration; reused: boolean }> {
+}): Promise<{ illustration: Illustration; reused: boolean; aiError?: string }> {
   const {
     taxonId,
     style,
     existingIllustrations,
     forceNewVersion = false,
-    fallbackPhotoDataUrl,
   } = params;
 
+  // Solo reutilizar láminas reales (no pendientes de IA ni proxies viejos)
   const matching = existingIllustrations
     .filter(
       (ill) =>
         ill.taxonId === taxonId &&
         ill.style === style &&
-        !ill.imageUrl.includes('/api/image-proxy?')
+        !ill.isPendingAi &&
+        !ill.imageUrl.includes('/api/image-proxy?') &&
+        !ill.modelProvider.toLowerCase().includes('local')
     )
     .sort((a, b) => b.version - a.version);
 
@@ -744,6 +763,7 @@ export async function generateOrReuseIllustration(params: {
   const species = findSpeciesByTaxonId(taxonId) || ARGENTINA_BIRDS_CATALOG[0];
   const nextVersion = matching.length > 0 ? matching[0].version + 1 : 1;
 
+  // Láminas estáticas de galería ya pre-generadas por IA para las 4 aves emblemáticas del catálogo
   const dedicatedStaticPlate =
     style === 'muralismo_fauna'
       ? species.defaultMuralPlate
@@ -752,7 +772,9 @@ export async function generateOrReuseIllustration(params: {
         : species.defaultGraphitePlate;
 
   let finalImageUrl = '';
-  let modelProvider = 'Estudio Naturalista';
+  let modelProvider = 'Estudio IA Bioma';
+  let isPendingAi = false;
+  let aiPendingReason: string | undefined;
   let variationNote =
     nextVersion === 1
       ? style === 'muralismo_fauna'
@@ -760,14 +782,15 @@ export async function generateOrReuseIllustration(params: {
         : style === 'acuarela_naturalista'
           ? 'Lámina en acuarela botánica sobre papel algodón'
           : 'Apunte de campo en lápiz grafito 2B/4B'
-      : `Versión #${nextVersion} — Variación artística naturalista`;
+      : `Versión #${nextVersion} — Variación artística naturalista IA`;
 
-  // 1. Si no tiene lámina dedicada O se pidió nueva versión, intentar generación real por IA en el servidor
+  // 1. En entorno real, intentar SIEMPRE generación real por IA cuando no hay lámina curada v1 o se pidió nueva versión
+  let serverErrorDetail = '';
   let geminiImageQuotaExceeded = false;
+  let missingImageProvider = false;
   const shouldTryCloudImage =
-    !isTestEnvironment() &&
-    cachedIllustrationCloudConfigured !== false &&
-    (!dedicatedStaticPlate || forceNewVersion);
+    !isTestEnvironment() && (!dedicatedStaticPlate || forceNewVersion);
+
   if (shouldTryCloudImage) {
     try {
       const res = await fetch(`${getApiBase()}/api/generate-illustration`, {
@@ -791,102 +814,57 @@ export async function generateOrReuseIllustration(params: {
         };
         if (gen.imageUrl) {
           finalImageUrl = gen.imageUrl;
-          modelProvider = gen.modelProvider || 'Google Gemini — Ilustración Botánica';
+          modelProvider = gen.modelProvider || 'IA Naturalista Bioma';
           variationNote = gen.variationNote || variationNote;
+          cachedIllustrationCloudConfigured = true;
         }
-      } else if (res.status === 429) {
-        geminiImageQuotaExceeded = true;
-      } else if (res.status === 503) {
-        cachedIllustrationCloudConfigured = false;
-      }
-    } catch {
-      // Continuar con motor local de acuarela/grafito de la misma especie
-    }
-  }
-
-  // 2. Si tiene lámina dedicada para esta especie exacta
-  if (!finalImageUrl && dedicatedStaticPlate) {
-    finalImageUrl =
-      nextVersion > 1
-        ? await createArtisticPlateDataUrl(dedicatedStaticPlate, style, nextVersion, false, false)
-        : dedicatedStaticPlate;
-    modelProvider = 'Colección Botánica Bioma';
-  }
-
-  // 3. Si no tiene lámina estática propia (o el proveedor cloud no devolvió imagen),
-  // sintetizar una lámina real en acuarela/tinta sepia o lápiz grafito con el motor Canvas local
-  // a partir de la fotografía verificada de ESA misma especie (nunca de otra).
-  if (!finalImageUrl) {
-    let sourceRefUrl = species.referencePhotos?.[0]?.url || species.referencePhotos?.[0]?.thumbUrl;
-    if (!sourceRefUrl && !isTestEnvironment()) {
-      const fetched = await fetchReferencePhotosForSpecies(species.scientificName);
-      sourceRefUrl = fetched[0]?.url || fetched[0]?.thumbUrl;
-    }
-
-    if (sourceRefUrl) {
-      const paintedFromRef = await createArtisticPlateDataUrl(
-        sourceRefUrl,
-        style,
-        nextVersion,
-        true,
-        true
-      );
-      // Si la foto remota no pudo leerse en Canvas (ej.: sin conexión) y tenemos foto del usuario, pintar desde ella
-      if (
-        !isTestEnvironment() &&
-        !paintedFromRef.startsWith('data:') &&
-        fallbackPhotoDataUrl
-      ) {
-        finalImageUrl = await createArtisticPlateDataUrl(
-          fallbackPhotoDataUrl,
-          style,
-          nextVersion,
-          true,
-          false
-        );
       } else {
-        finalImageUrl = paintedFromRef;
+        const errBody = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          detail?: string;
+        };
+        serverErrorDetail = errBody.detail || errBody.error || `HTTP ${res.status}`;
+        if (res.status === 429 || errBody.error === 'GEMINI_IMAGE_QUOTA_EXCEEDED') {
+          geminiImageQuotaExceeded = true;
+        } else if (res.status === 503 || errBody.error === 'GEMINI_API_KEY_MISSING') {
+          missingImageProvider = true;
+          cachedIllustrationCloudConfigured = false;
+        }
       }
+    } catch (err) {
+      serverErrorDetail = err instanceof Error ? err.message : 'Sin conexión con el generador de IA';
+    }
+  }
 
-      modelProvider = geminiImageQuotaExceeded
-        ? style === 'muralismo_fauna'
-          ? 'Muralismo botánico local (Gemini sin cuota de imagen)'
-          : style === 'acuarela_naturalista'
-            ? 'Acuarela botánica local (Gemini sin cuota de imagen)'
-            : 'Grafito botánico local (Gemini sin cuota de imagen)'
-        : style === 'muralismo_fauna'
-          ? 'Muralismo de fauna autóctona local'
-          : style === 'acuarela_naturalista'
-            ? 'Acuarela botánica local'
-            : 'Apunte en grafito local';
-      variationNote = geminiImageQuotaExceeded
-        ? style === 'muralismo_fauna'
-          ? 'Muralismo de fauna local (agregá HUGGINGFACE_API_KEY gratis o facturación en Gemini para mural 100% IA)'
-          : style === 'acuarela_naturalista'
-            ? 'Acuarela botánica local (agregá HUGGINGFACE_API_KEY gratis o facturación en Gemini para pintura 100% IA)'
-            : 'Grafito botánico local (agregá HUGGINGFACE_API_KEY gratis o facturación en Gemini para dibujo 100% IA)'
-        : style === 'muralismo_fauna'
-          ? 'Mural de fauna autóctona y biodiversidad sobre muro cálido'
-          : style === 'acuarela_naturalista'
-            ? 'Lámina en acuarela botánica sobre papel algodón'
-            : 'Apunte de campo en lápiz grafito 2B/4B';
-    } else if (fallbackPhotoDataUrl) {
-      finalImageUrl = await createArtisticPlateDataUrl(
-        fallbackPhotoDataUrl,
-        style,
-        nextVersion,
-        true,
-        false
-      );
-      modelProvider =
-        style === 'muralismo_fauna'
-          ? 'Muralismo de fauna desde fotografía'
-          : style === 'acuarela_naturalista'
-            ? 'Acuarela botánica desde fotografía'
-            : 'Apunte en grafito desde fotografía';
+  // 2. Si tiene lámina curada pre-generada por IA (solo para v1 o entorno de pruebas)
+  if (!finalImageUrl && dedicatedStaticPlate && (!forceNewVersion || isTestEnvironment())) {
+    finalImageUrl =
+      isTestEnvironment() && nextVersion > 1
+        ? `${dedicatedStaticPlate}${dedicatedStaticPlate.includes('?') ? '&' : '?'}v=${nextVersion}`
+        : dedicatedStaticPlate;
+    modelProvider = 'Colección IA Bioma';
+  }
+
+  // 3. SIN respaldo de filtros locales Canvas: si la IA no pudo generar la obra todavía,
+  //    mostrar una lámina tipográfica elegante en estado `isPendingAi` con instrucción clara
+  //    y botón de reintento, para que las ilustraciones finales sean SIEMPRE 100% IA.
+  if (!finalImageUrl) {
+    finalImageUrl = createFallbackBotanicalMonogramPlate(species, style, true);
+    isPendingAi = true;
+    modelProvider = 'Ilustración IA pendiente';
+    if (geminiImageQuotaExceeded) {
+      aiPendingReason =
+        'Tu clave gratuita de Gemini no incluye generación de imágenes (error 429). Configurá Cloudflare Workers AI (gratis, FLUX.1) o activá facturación en Google AI Studio para generar la obra con IA.';
+      variationNote = 'Pendiente de generación por IA (configurar Cloudflare AI o facturación Gemini)';
+    } else if (missingImageProvider) {
+      aiPendingReason =
+        'Falta configurar un proveedor de generación de imágenes IA en el servidor (Cloudflare Workers AI, Hugging Face o Gemini con facturación).';
+      variationNote = 'Pendiente de proveedor de ilustraciones IA';
     } else {
-      finalImageUrl = createFallbackBotanicalMonogramPlate(species, style);
-      modelProvider = 'Lámina tipográfica de campo';
+      aiPendingReason = serverErrorDetail
+        ? `No se pudo conectar con el modelo de ilustración IA (${serverErrorDetail.slice(0, 140)}). Tocá «Generar con IA» para reintentar.`
+        : 'No se pudo generar la ilustración IA en este momento. Tocá «Generar con IA» para reintentar.';
+      variationNote = 'Pendiente de generación por IA — reintento disponible';
     }
   }
 
@@ -907,114 +885,21 @@ export async function generateOrReuseIllustration(params: {
     modelProvider,
     variationNote,
     createdAt: new Date().toISOString(),
+    isPendingAi: isPendingAi || undefined,
+    aiPendingReason,
   };
 
-  return { illustration: newIllustration, reused: false };
-}
-
-/**
- * Crea una versión alternativa o un estudio pictórico/grafito en Canvas
- * respetando fielmente la morfología de la especie seleccionada.
- */
-async function createArtisticPlateDataUrl(
-  sourceUrl: string,
-  style: IllustrationStyle,
-  version: number,
-  applyBotanicalFilter: boolean,
-  allowProxyFallback = false
-): Promise<string> {
-  if (
-    typeof Image === 'undefined' ||
-    typeof document === 'undefined' ||
-    isTestEnvironment()
-  ) {
-    return `${sourceUrl}${sourceUrl.includes('?') ? '&' : '?'}v=${version}`;
-  }
-
-  const renderFromUrl = (loadUrl: string): Promise<string | null> =>
-    new Promise((resolve) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        try {
-          // Para fotos reales sin lámina pintada, ejecutar el motor pictórico real
-          // (Kuwahara de 2 pasadas + tinta sepia + disolución de bokeh / grafito Color-Dodge)
-          if (applyBotanicalFilter) {
-            const painted = renderBotanicalPlateFromImage(img, style, version);
-            resolve(painted);
-            return;
-          }
-
-          // Para láminas de acuarela/grafito ya pintadas a las que se les pide otra versión
-          const size = 900;
-          const canvas = document.createElement('canvas');
-          canvas.width = size;
-          canvas.height = size;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            resolve(null);
-            return;
-          }
-
-          ctx.fillStyle =
-            style === 'muralismo_fauna'
-              ? '#EFE7D8'
-              : style === 'acuarela_naturalista'
-                ? '#FAF5E8'
-                : '#F6F2E8';
-          ctx.fillRect(0, 0, size, size);
-
-          const imgRatio = (img.width || size) / (img.height || size);
-          let sx = 0;
-          let sy = 0;
-          let sw = img.width || size;
-          let sh = img.height || size;
-          if (imgRatio > 1) {
-            sw = img.height;
-            sx = (img.width - sw) / 2;
-          } else {
-            sh = img.width;
-            sy = (img.height - sh) / 2;
-          }
-
-          ctx.save();
-          ctx.translate(size / 2, size / 2);
-          if (version > 1 && version % 2 === 0) {
-            ctx.scale(-1.04, 1.04);
-          } else if (version > 1) {
-            ctx.scale(1.07, 1.07);
-            ctx.rotate(-0.02);
-          }
-
-          ctx.drawImage(img, sx, sy, sw, sh, -size / 2, -size / 2, size, size);
-          ctx.restore();
-
-          resolve(canvas.toDataURL('image/jpeg', 0.92));
-        } catch {
-          resolve(null);
-        }
-      };
-      img.onerror = () => resolve(null);
-      img.src = loadUrl;
-    });
-
-  // 1. Intentar directamente (rápido y con CORS si el origen lo soporta)
-  const directRendered = await renderFromUrl(sourceUrl);
-  if (directRendered) return directRendered;
-
-  // 2. Si el origen remoto no permitió exportar Canvas, intentar proxy solo para renderizar en Canvas
-  if (allowProxyFallback && /^https:\/\//i.test(sourceUrl)) {
-    const proxied = await renderFromUrl(getProxiedImageUrl(sourceUrl));
-    if (proxied) return proxied;
-  }
-
-  // 3. Fallback garantizado: siempre devolver la URL directa original (nunca un /api/image-proxy fallido)
-  return sourceUrl;
+  return {
+    illustration: newIllustration,
+    reused: false,
+    aiError: isPendingAi ? aiPendingReason : undefined,
+  };
 }
 
 function createFallbackBotanicalMonogramPlate(
   species: SpeciesCatalogEntry,
-  style: IllustrationStyle
+  style: IllustrationStyle,
+  pendingAiNotice = false
 ): string {
   const bg =
     style === 'muralismo_fauna'
@@ -1028,14 +913,29 @@ function createFallbackBotanicalMonogramPlate(
       : style === 'acuarela_naturalista'
         ? '#38573E'
         : '#4D4840';
+  const styleLabel =
+    style === 'muralismo_fauna'
+      ? 'Muralismo de naturaleza'
+      : style === 'acuarela_naturalista'
+        ? 'Acuarela naturalista'
+        : 'Lápiz grafito';
   const emblem = ORGANISM_GROUP_META[getSpeciesGroup(species)].emoji;
+  const safeCommon = species.commonNameAr.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const safeSci = species.scientificName.replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800">
     <rect width="800" height="800" fill="${bg}"/>
     <rect x="34" y="34" width="732" height="732" fill="none" stroke="${stroke}" stroke-opacity="0.28" stroke-width="2"/>
-    <circle cx="400" cy="360" r="140" fill="${stroke}" fill-opacity="0.08"/>
-    <text x="400" y="385" text-anchor="middle" font-family="Georgia, serif" font-size="108" fill="${stroke}" fill-opacity="0.65">${emblem}</text>
-    <text x="400" y="560" text-anchor="middle" font-family="Georgia, serif" font-size="38" fill="#27221E">${species.commonNameAr.replace(/&/g, '&amp;')}</text>
-    <text x="400" y="608" text-anchor="middle" font-family="Georgia, serif" font-style="italic" font-size="26" fill="${stroke}">${species.scientificName.replace(/&/g, '&amp;')}</text>
+    <rect x="48" y="48" width="704" height="704" fill="none" stroke="${stroke}" stroke-opacity="0.16" stroke-width="1"/>
+    <circle cx="400" cy="315" r="128" fill="${stroke}" fill-opacity="0.08"/>
+    <text x="400" y="342" text-anchor="middle" font-family="Georgia, serif" font-size="102" fill="${stroke}" fill-opacity="0.72">${emblem}</text>
+    <text x="400" y="510" text-anchor="middle" font-family="Georgia, serif" font-weight="bold" font-size="36" fill="#27221E">${safeCommon}</text>
+    <text x="400" y="556" text-anchor="middle" font-family="Georgia, serif" font-style="italic" font-size="25" fill="${stroke}">${safeSci}</text>
+    ${
+      pendingAiNotice
+        ? `<text x="400" y="636" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="600" fill="${stroke}" fill-opacity="0.88">${styleLabel} · Pendiente de generación IA</text>
+    <text x="400" y="668" text-anchor="middle" font-family="sans-serif" font-size="17" fill="#5A5144">Tocá «Generar con IA» para pintar esta obra</text>`
+        : ''
+    }
   </svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }

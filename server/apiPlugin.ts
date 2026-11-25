@@ -13,6 +13,7 @@ import {
 import {
   fetchINaturalistPhotosForSpecies,
   generateNaturalistPlateWithGemini,
+  getEffectiveAiImageProviders,
   identifyBirdWithGemini,
   inferServerOrganismGroup,
   isAllowedImageProxyUrl,
@@ -24,8 +25,20 @@ import {
   type ServerIllustrationStyle,
   type ServerOrganismGroup,
 } from './secureAiProxy.ts';
+import {
+  fetchObjectFromR2,
+  fetchPublicNotebookFromCloud,
+  getCloudStorageStatus,
+  isValidMediaObjectKey,
+  loadUserCloudStateFromFirestore,
+  publishPublicNotebookToCloud,
+  revokePublicNotebookInCloud,
+  syncUserStateToCloud,
+  uploadDataUrlToR2,
+  type CloudSyncStatePayload,
+} from './cloudStorageService.ts';
 
-const MAX_BODY_BYTES = 12 * 1024 * 1024; // 12 MB
+const MAX_BODY_BYTES = 24 * 1024 * 1024; // 24 MB para sincronización segura de fotos sanitizadas
 
 function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
   res.statusCode = statusCode;
@@ -149,7 +162,7 @@ export async function handleBirdyApiRequest(
     return true;
   }
 
-  // 1. Estado del servidor, IA y autenticación (sin exponer secretos ni correos)
+  // 1. Estado del servidor, IA, almacenamiento real en la nube y autenticación (sin exponer secretos ni correos)
   if (pathname === '/api/health' && method === 'GET') {
     const env = resolveServerEnv();
     const visionFallbackProviders: string[] = [];
@@ -157,13 +170,9 @@ export async function handleBirdyApiRequest(
     if (env.OPENROUTER_API_KEY) visionFallbackProviders.push('OpenRouter Vision (:free)');
     if (env.HUGGINGFACE_API_KEY) visionFallbackProviders.push('Hugging Face Vision (Qwen2.5-VL)');
 
-    const imageFallbackProviders: string[] = [];
-    if (env.CLOUDFLARE_ACCOUNT_ID && env.CLOUDFLARE_API_TOKEN) {
-      imageFallbackProviders.push('Cloudflare Workers AI (FLUX.1-schnell)');
-    }
-    if (env.HUGGINGFACE_API_KEY) {
-      imageFallbackProviders.push('Hugging Face (FLUX.1-schnell)');
-    }
+    const imageFallbackProviders = getEffectiveAiImageProviders(env);
+    const cloudStorage = getCloudStorageStatus(env);
+
     sendJson(res, 200, {
       ok: true,
       aiConfigured: Boolean(env.GEMINI_API_KEY || visionFallbackProviders.length > 0),
@@ -174,7 +183,8 @@ export async function handleBirdyApiRequest(
       imageFallbackProviders,
       provider: 'gemini',
       visionModel: resolveActiveVisionModel(env),
-      imageModel: env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-lite-image',
+      imageModel: env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image',
+      cloudStorage,
       auth: getAuthConfigStatus(env),
     });
     return true;
@@ -378,17 +388,22 @@ export async function handleBirdyApiRequest(
     }
   }
 
-  // 7. Generación de lámina botánica original (PROTEGIDA por sesión Google + allowlist)
+  // 7. Generación de lámina botánica original 100% IA (PROTEGIDA por sesión Google + allowlist)
   if (pathname === '/api/generate-illustration' && method === 'POST') {
     const env = resolveServerEnv();
     if (enforceAiAuthGuard(req, res, env)) {
       return true;
     }
 
-    if (!env.GEMINI_API_KEY && !env.HUGGINGFACE_API_KEY && !env.CLOUDFLARE_API_TOKEN) {
+    if (
+      !env.GEMINI_API_KEY &&
+      !env.HUGGINGFACE_API_KEY &&
+      !env.CLOUDFLARE_API_TOKEN &&
+      !env.OPENAI_API_KEY
+    ) {
       sendJson(res, 503, {
         error: 'GEMINI_API_KEY_MISSING',
-        fallback: true,
+        fallback: false,
       });
       return true;
     }
@@ -430,16 +445,44 @@ export async function handleBirdyApiRequest(
         },
         env
       );
+
+      // Si Cloudflare R2 está configurado, subir la obra IA directamente al bucket para evitar DataURLs gigantes
+      const cloudStatus = getCloudStorageStatus(env);
+      if (cloudStatus.r2BucketConfigured && generated.imageUrl.startsWith('data:image/')) {
+        try {
+          const session = getAuthenticatedUserFromRequest(req, env);
+          const ownerUid =
+            session.status === 'ok' ? session.user.uid : 'local-dev-user';
+          const safeSlug = body.scientificName
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_|_$/g, '');
+          const uploaded = await uploadDataUrlToR2({
+            keyPrefix: `users/${ownerUid.replace(/[^a-zA-Z0-9_.\-:]/g, '_')}/illustrations/${safeSlug}_${resolvedStyle}_v${body.version || 1}_${Date.now()}`,
+            dataUrl: generated.imageUrl,
+            env,
+          });
+          if (uploaded) {
+            generated.imageUrl = uploaded.url;
+          }
+        } catch (r2Err) {
+          console.warn(
+            '[Bioma API] R2 upload skipped for illustration:',
+            r2Err instanceof Error ? r2Err.message : r2Err
+          );
+        }
+      }
+
       sendJson(res, 200, generated);
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Error generando lámina';
       const isQuota = msg.includes('GEMINI_IMAGE_QUOTA_EXCEEDED');
-      console.error('[Birdy API] /api/generate-illustration error:', msg);
+      console.error('[Bioma API] /api/generate-illustration error:', msg);
       sendJson(res, isQuota ? 429 : 502, {
         error: isQuota ? 'GEMINI_IMAGE_QUOTA_EXCEEDED' : 'ILLUSTRATION_FAILED',
-        fallback: true,
-        detail: msg.slice(0, 220),
+        fallback: false,
+        detail: msg.slice(0, 260),
       });
       return true;
     }
@@ -494,6 +537,205 @@ export async function handleBirdyApiRequest(
       res.end(buffer);
       return true;
     } catch {
+      res.statusCode = 502;
+      res.end();
+      return true;
+    }
+  }
+
+  // 10. Persistencia real en la nube: cargar estado desde Firestore (PROTEGIDO)
+  if (pathname === '/api/cloud/state' && method === 'GET') {
+    const env = resolveServerEnv();
+    if (enforceAiAuthGuard(req, res, env)) {
+      return true;
+    }
+    const status = getCloudStorageStatus(env);
+    if (!status.firestoreConfigured) {
+      sendJson(res, 200, { configured: false, state: null, cloudStorage: status });
+      return true;
+    }
+
+    const session = getAuthenticatedUserFromRequest(req, env);
+    const uid =
+      session.status === 'ok'
+        ? session.user.uid
+        : parsedUrl.searchParams.get('uid') || 'google-valeria-ar-01';
+
+    try {
+      const state = await loadUserCloudStateFromFirestore(uid, env);
+      sendJson(res, 200, { configured: true, state, cloudStorage: status });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error leyendo Firestore';
+      console.error('[Bioma API] /api/cloud/state error:', msg);
+      sendJson(res, 502, { error: 'CLOUD_LOAD_FAILED', message: msg.slice(0, 220) });
+      return true;
+    }
+  }
+
+  // 11. Persistencia real en la nube: sincronizar cuadernos, fotos (R2) y metadatos (Firestore)
+  if (pathname === '/api/cloud/sync' && method === 'POST') {
+    const env = resolveServerEnv();
+    if (enforceAiAuthGuard(req, res, env)) {
+      return true;
+    }
+    const status = getCloudStorageStatus(env);
+    if (!status.firestoreConfigured && !status.r2BucketConfigured) {
+      sendJson(res, 200, { configured: false, cloudStorage: status });
+      return true;
+    }
+
+    try {
+      const body = await readJsonBody<CloudSyncStatePayload & { uid?: string }>(req);
+      const session = getAuthenticatedUserFromRequest(req, env);
+      const uid =
+        session.status === 'ok' ? session.user.uid : body.uid || 'google-valeria-ar-01';
+
+      const result = await syncUserStateToCloud(uid, body, env);
+      sendJson(res, 200, { configured: true, ...result, cloudStorage: status });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error sincronizando con la nube';
+      console.error('[Bioma API] /api/cloud/sync error:', msg);
+      sendJson(res, 502, { error: 'CLOUD_SYNC_FAILED', message: msg.slice(0, 240) });
+      return true;
+    }
+  }
+
+  // 12. Publicar o actualizar proyección pública de cuaderno compartido en Firestore + R2
+  if (pathname === '/api/cloud/share' && method === 'POST') {
+    const env = resolveServerEnv();
+    if (enforceAiAuthGuard(req, res, env)) {
+      return true;
+    }
+    const status = getCloudStorageStatus(env);
+    if (!status.firestoreConfigured) {
+      sendJson(res, 200, { configured: false, published: false });
+      return true;
+    }
+
+    try {
+      const body = await readJsonBody<{ projection?: Record<string, unknown>; uid?: string }>(req);
+      if (!body.projection) {
+        sendJson(res, 400, { error: 'MISSING_PROJECTION' });
+        return true;
+      }
+      const session = getAuthenticatedUserFromRequest(req, env);
+      const uid =
+        session.status === 'ok' ? session.user.uid : body.uid || 'google-valeria-ar-01';
+      const result = await publishPublicNotebookToCloud(uid, body.projection, env);
+      sendJson(res, 200, { configured: true, ...result });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error publicando cuaderno';
+      console.error('[Bioma API] /api/cloud/share error:', msg);
+      sendJson(res, 502, { error: 'CLOUD_SHARE_FAILED', message: msg.slice(0, 220) });
+      return true;
+    }
+  }
+
+  // 13. Revocar enlace público compartido en Firestore al instante
+  if (pathname === '/api/cloud/share/revoke' && method === 'POST') {
+    const env = resolveServerEnv();
+    if (enforceAiAuthGuard(req, res, env)) {
+      return true;
+    }
+    const status = getCloudStorageStatus(env);
+    if (!status.firestoreConfigured) {
+      sendJson(res, 200, { configured: false, revoked: false });
+      return true;
+    }
+
+    try {
+      const body = await readJsonBody<{ shareToken?: string; uid?: string }>(req);
+      if (!body.shareToken) {
+        sendJson(res, 400, { error: 'MISSING_SHARE_TOKEN' });
+        return true;
+      }
+      const session = getAuthenticatedUserFromRequest(req, env);
+      const uid =
+        session.status === 'ok' ? session.user.uid : body.uid || 'google-valeria-ar-01';
+      await revokePublicNotebookInCloud(uid, body.shareToken, env);
+      sendJson(res, 200, { configured: true, revoked: true });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error revocando enlace';
+      console.error('[Bioma API] /api/cloud/share/revoke error:', msg);
+      sendJson(res, 502, { error: 'CLOUD_REVOKE_FAILED', message: msg.slice(0, 220) });
+      return true;
+    }
+  }
+
+  // 14. Lectura pública de un cuaderno compartido (sin requerir sesión Google, para familia/amigos)
+  if (pathname.startsWith('/api/public/notebook/') && method === 'GET') {
+    const env = resolveServerEnv();
+    const token = decodeURIComponent(pathname.slice('/api/public/notebook/'.length)).trim();
+    if (!token) {
+      sendJson(res, 400, { status: 'not_found' });
+      return true;
+    }
+    try {
+      const lookup = await fetchPublicNotebookFromCloud(token, env);
+      if (lookup.status === 'unconfigured') {
+        sendJson(res, 200, { configured: false, status: 'unconfigured' });
+        return true;
+      }
+      sendJson(res, 200, { configured: true, ...lookup });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error leyendo cuaderno compartido';
+      console.error('[Bioma API] /api/public/notebook error:', msg);
+      sendJson(res, 502, { status: 'not_found', error: msg.slice(0, 180) });
+      return true;
+    }
+  }
+
+  // 15. Proxy seguro de medios almacenados en Cloudflare R2 privado (/api/media/<key>)
+  if (pathname.startsWith('/api/media/') && method === 'GET') {
+    const env = resolveServerEnv();
+    const key = decodeURIComponent(pathname.slice('/api/media/'.length)).replace(/^\/+/, '');
+    if (!isValidMediaObjectKey(key)) {
+      sendJson(res, 400, { error: 'INVALID_MEDIA_KEY' });
+      return true;
+    }
+
+    // Archivos privados bajo users/<uid>/ exigen sesión del propietario cuando la auth está activa;
+    // archivos bajo public/<shareToken>/ son legibles públicamente (sanitizados sin EXIF).
+    if (!key.startsWith('public/')) {
+      if (enforceAiAuthGuard(req, res, env)) {
+        return true;
+      }
+      if (isAuthEnforced(env) && key.startsWith('users/')) {
+        const session = getAuthenticatedUserFromRequest(req, env);
+        const keyOwner = key.split('/')[1] || '';
+        const sessionUid =
+          session.status === 'ok'
+            ? session.user.uid.replace(/[^a-zA-Z0-9_.\-:]/g, '_')
+            : '';
+        if (!sessionUid || keyOwner !== sessionUid) {
+          sendJson(res, 403, { error: 'FORBIDDEN_MEDIA' });
+          return true;
+        }
+      }
+    }
+
+    try {
+      const obj = await fetchObjectFromR2(key, env);
+      if (!obj) {
+        res.statusCode = 404;
+        res.end();
+        return true;
+      }
+      res.statusCode = 200;
+      res.setHeader('Content-Type', obj.contentType);
+      res.setHeader(
+        'Cache-Control',
+        key.startsWith('public/') ? 'public, max-age=31536000, immutable' : 'private, max-age=86400'
+      );
+      res.end(obj.buffer);
+      return true;
+    } catch (err) {
+      console.error('[Bioma API] /api/media error:', err instanceof Error ? err.message : err);
       res.statusCode = 502;
       res.end();
       return true;

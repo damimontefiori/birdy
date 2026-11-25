@@ -13,12 +13,16 @@ import {
   Sprout,
   ZoomIn,
 } from 'lucide-react';
-import { fetchPublicNotebookByToken } from '../services/storageAndSyncService';
+import {
+  fetchPublicNotebookByToken,
+  fetchPublicNotebookByTokenAsync,
+} from '../services/storageAndSyncService';
 import {
   ILLUSTRATION_STYLE_META,
   ORGANISM_GROUP_META,
   ORGANISM_GROUPS_ORDER,
   OrganismGroup,
+  PublicNotebookProjection,
   PublicSanitizedSheet,
 } from '../types/domain';
 import { ImageLightbox, LightboxItem } from './ImageLightbox';
@@ -32,7 +36,27 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
   shareToken,
   onExitPublicPreview,
 }) => {
-  const lookup = fetchPublicNotebookByToken(shareToken);
+  const [lookup, setLookup] = useState<
+    | { status: 'loading' }
+    | { status: 'ok'; notebook: PublicNotebookProjection }
+    | { status: 'revoked' | 'not_found' }
+  >(() => {
+    const local = fetchPublicNotebookByToken(shareToken);
+    if (local.status === 'ok' || local.status === 'revoked') {
+      return local;
+    }
+    return { status: 'loading' };
+  });
+
+  useEffect(() => {
+    let active = true;
+    void fetchPublicNotebookByTokenAsync(shareToken).then((res) => {
+      if (active) setLookup(res);
+    });
+    return () => {
+      active = false;
+    };
+  }, [shareToken]);
   const [selectedSheet, setSelectedSheet] = useState<PublicSanitizedSheet | null>(null);
   const [activeGroupFilter, setActiveGroupFilter] = useState<OrganismGroup | 'todos'>('todos');
   const [showFieldNotes, setShowFieldNotes] = useState<boolean>(false);
@@ -63,6 +87,22 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
     window.addEventListener('popstate', handlePop);
     return () => window.removeEventListener('popstate', handlePop);
   }, []);
+
+  if (lookup.status === 'loading') {
+    return (
+      <div className="app-shell">
+        <div className="notebook-page" style={{ textAlign: 'center', padding: '42px 24px' }}>
+          <Sprout size={36} color="#38573E" style={{ marginBottom: 10 }} />
+          <h1 className="serif-heading" style={{ fontSize: '1.75rem' }}>
+            Abriendo cuaderno compartido…
+          </h1>
+          <p style={{ color: 'var(--ink-secondary)', margin: '6px auto 0' }}>
+            Cargando láminas ilustradas desde Bioma.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (lookup.status !== 'ok') {
     return (
@@ -290,6 +330,32 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
                 {selectedSheet.coexistenceNote && (
                   <p className="eco-role-note">{selectedSheet.coexistenceNote}</p>
                 )}
+              </div>
+            )}
+
+            {selectedSheet.gardenEcology && (
+              <div className="garden-ecology-card">
+                <div className="garden-ecology-header">
+                  <Sprout size={14} /> ¿Qué viene a buscar al jardín?
+                </div>
+                <div className="garden-ecology-grid">
+                  <div className="garden-ecology-item">
+                    <span className="garden-ecology-label">🌿 Qué busca</span>
+                    <p>{selectedSheet.gardenEcology.seeksInGarden}</p>
+                  </div>
+                  <div className="garden-ecology-item">
+                    <span className="garden-ecology-label">🌸 Flores y plantas</span>
+                    <p>{selectedSheet.gardenEcology.preferredFlowers}</p>
+                  </div>
+                  <div className="garden-ecology-item">
+                    <span className="garden-ecology-label">🍋 Frutales y árboles</span>
+                    <p>{selectedSheet.gardenEcology.preferredFruitTrees}</p>
+                  </div>
+                  <div className="garden-ecology-item">
+                    <span className="garden-ecology-label">🪲 Qué come / insectos</span>
+                    <p>{selectedSheet.gardenEcology.insectsOrFoodEaten}</p>
+                  </div>
+                </div>
               </div>
             )}
 

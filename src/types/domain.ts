@@ -177,6 +177,17 @@ export interface SpeciesReferencePhoto {
   source?: string;
 }
 
+export interface GardenEcologyInfo {
+  /** Qué viene a buscar específicamente a tu jardín (néctar, frutas, insectos, refugio, plantas hospederas) */
+  seeksInGarden: string;
+  /** Flores y plantas que prefiere visitar o donde deposita huevos */
+  preferredFlowers: string;
+  /** Árboles frutales o nativos que busca en el jardín */
+  preferredFruitTrees: string;
+  /** Insectos, presas o alimentos concretos que consume */
+  insectsOrFoodEaten: string;
+}
+
 export interface SpeciesCatalogEntry {
   taxonId: string;
   organismGroup?: OrganismGroup;
@@ -190,6 +201,7 @@ export interface SpeciesCatalogEntry {
   dietTag?: string;
   ecologicalRole?: string;
   coexistenceNote?: string;
+  gardenEcology?: GardenEcologyInfo;
   identificationTraits: string;
   typicalBehavior: string;
   dietAndHabitat: string;
@@ -213,6 +225,10 @@ export interface Illustration {
   modelProvider: string;
   variationNote?: string;
   createdAt: string;
+  /** True si todavía no se pudo generar con IA (ej. falta configurar proveedor de imagen o error temporal) */
+  isPendingAi?: boolean;
+  /** Detalle del error/estado cuando isPendingAi es true */
+  aiPendingReason?: string;
 }
 
 export interface AICandidate {
@@ -231,6 +247,7 @@ export interface AICandidate {
   dietTag?: string;
   ecologicalRole?: string;
   coexistenceNote?: string;
+  gardenEcology?: GardenEcologyInfo;
   identificationTraits?: string;
   typicalBehavior?: string;
   dietAndHabitat?: string;
@@ -306,6 +323,7 @@ export interface PublicSanitizedSheet {
   dietTag?: string;
   ecologicalRole?: string;
   coexistenceNote?: string;
+  gardenEcology?: GardenEcologyInfo;
   identificationTraits: string;
   typicalBehavior: string;
   dietAndHabitat: string;

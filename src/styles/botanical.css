@@ -1920,3 +1920,77 @@ select,
   color: var(--botanical-green-dark);
   line-height: 1.38;
 }
+
+/* Tarjeta "¿Qué viene a buscar a tu jardín?" */
+.garden-ecology-card {
+  margin-top: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: #FFFDF8;
+  border: 1px solid var(--paper-edge);
+}
+
+.garden-ecology-card.compact {
+  margin-top: 6px;
+  padding: 9px 10px;
+}
+
+.garden-ecology-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--botanical-green);
+  margin-bottom: 8px;
+}
+
+.garden-ecology-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 7px;
+}
+
+@media (min-width: 560px) {
+  .garden-ecology-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.garden-ecology-item {
+  background: var(--paper-inset);
+  border: 1px solid rgba(222, 211, 188, 0.78);
+  border-radius: 9px;
+  padding: 7px 9px;
+}
+
+.garden-ecology-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--botanical-green-dark);
+  margin-bottom: 2px;
+}
+
+.garden-ecology-item p {
+  margin: 0;
+  font-size: 0.81rem;
+  color: var(--ink-secondary);
+  line-height: 1.36;
+}
+
+/* Aviso claro cuando una ilustración está pendiente de IA (sin filtros locales) */
+.ai-pending-plate-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 11px;
+  background: var(--amber-soft);
+  border: 1px solid #E6CE9A;
+  border-left: 4px solid var(--amber-gold);
+}

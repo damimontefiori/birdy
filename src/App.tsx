@@ -50,6 +50,7 @@ import {
   findSpeciesByTaxonId,
   getAllKnownSpecies,
   getCustomSpeciesList,
+  getSpeciesGardenEcology,
   getSpeciesGroup,
   searchSpeciesCatalog,
 } from './data/argentinaBirdsCatalog';
@@ -83,13 +84,17 @@ import {
   exportFullBackupJson,
   formatShortArgentineDate,
   importFullBackupJson,
+  loadFullStateFromRemoteCloud,
   loadLocalDeviceState,
   publishOrUpdateSanitizedNotebookProjection,
+  publishSanitizedNotebookToRemoteCloud,
   rehydrateSightingPhotosFromIndexedDb,
   restoreFromGoogleCloudOnNewDevice,
+  revokePublicNotebookInRemoteCloud,
   revokePublicNotebookShareToken,
   saveLocalDeviceState,
   savePhotoBinaryToIndexedDb,
+  syncFullStateToRemoteCloud,
   syncSightingAndNotebookToCloud,
 } from './services/storageAndSyncService';
 import {
@@ -557,6 +562,70 @@ export const App: React.FC = () => {
     void refreshAiHealth();
   }, []);
 
+  // Hidratación automática desde Google Cloud Firestore (+ URLs de Cloudflare R2) al iniciar sesión
+  const hydrateFromRemoteCloudIfAvailable = async (user: UserProfile) => {
+    const remote = await loadFullStateFromRemoteCloud(user.uid);
+    if (!remote.configured || !remote.state) return;
+
+    const r = remote.state;
+    const hasRemoteData = r.notebooks.length > 0 || r.sightings.length > 0;
+    if (!hasRemoteData) return;
+
+    setPersisted((prev) => {
+      // Fusionar por ID priorizando datos más recientes o remotos respaldados
+      const mergeById = <T extends { id: string; updatedAt?: string }>(
+        localArr: T[],
+        remoteArr: T[]
+      ): T[] => {
+        const map = new Map<string, T>();
+        for (const item of localArr) map.set(item.id, item);
+        for (const item of remoteArr) {
+          const existing = map.get(item.id);
+          if (
+            !existing ||
+            !existing.updatedAt ||
+            (item.updatedAt && item.updatedAt >= existing.updatedAt)
+          ) {
+            map.set(item.id, item);
+          }
+        }
+        return Array.from(map.values());
+      };
+
+      const mergedNotebooks = mergeById(prev.notebooks, r.notebooks);
+      const mergedSheets = mergeById(prev.sheets, r.sheets);
+      const mergedSightings = mergeById(prev.sightings, r.sightings);
+      const mergedIlls = Array.from(
+        new Map(
+          [...prev.illustrations, ...r.illustrations].map((ill) => [ill.id, ill])
+        ).values()
+      );
+      const mergedCustom = Array.from(
+        new Map(
+          [...(prev.customSpecies || []), ...(r.customSpecies || [])].map((sp) => [sp.taxonId, sp])
+        ).values()
+      );
+
+      return {
+        ...prev,
+        user: { ...user, lastBackupAt: new Date().toISOString() },
+        notebooks: mergedNotebooks,
+        sheets: mergedSheets,
+        sightings: mergedSightings,
+        illustrations: mergedIlls,
+        customSpecies: mergedCustom,
+      };
+    });
+
+    setActiveNotebookId((cur) => cur || r.notebooks[0]?.id || null);
+    setScreen((cur) => {
+      if (cur === 'welcome' || cur === 'onboarding_first_notebook') {
+        return 'library';
+      }
+      return cur;
+    });
+  };
+
   // Sincronizar sesión real de Google (cookie HttpOnly) y limpiar parámetros ?auth_error=
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -583,6 +652,7 @@ export const App: React.FC = () => {
           if (cur !== 'welcome') return cur;
           return persisted.notebooks.length === 0 ? 'onboarding_first_notebook' : 'library';
         });
+        void hydrateFromRemoteCloudIfAvailable(verifiedUser);
       } else if (session.auth.authRequired) {
         // Si el servidor exige Google Auth real, exigir inicio de sesión con cuenta autorizada
         setPersisted((prev) => (prev.user ? { ...prev, user: null } : prev));
@@ -618,6 +688,7 @@ export const App: React.FC = () => {
       setScreen('library');
     }
     showToast(`¡Bienvenida, ${profile.displayName}!`);
+    void hydrateFromRemoteCloudIfAvailable(profile);
   };
 
   const handleSignOut = async () => {
@@ -860,6 +931,14 @@ export const App: React.FC = () => {
       notebooks: [...persisted.notebooks, newNotebook],
     };
     setPersisted(nextState);
+    if (isOnline) {
+      void syncFullStateToRemoteCloud({
+        uid: persisted.user.uid,
+        state: nextState,
+        isOnline: true,
+        fullSync: false,
+      });
+    }
     pushHistoryLayer('notebook_detail');
     setActiveNotebookId(newNotebook.id);
     setNotebookSearchQuery('');
@@ -1188,7 +1267,7 @@ export const App: React.FC = () => {
         };
         nextSheets = nextSheets.map((sh) => (sh.id === updatedSheet.id ? updatedSheet : sh));
       } else {
-        const { illustration } = await generateOrReuseIllustration({
+        const { illustration, aiError } = await generateOrReuseIllustration({
           taxonId,
           style: activeNotebook.style,
           existingIllustrations: persisted.illustrations,
@@ -1212,6 +1291,9 @@ export const App: React.FC = () => {
           updatedAt: new Date().toISOString(),
         };
         nextSheets.push(newSheet);
+        if (aiError) {
+          showToast('Especie guardada. La ilustración IA quedó pendiente hasta configurar el generador.');
+        }
       }
 
       const nextSightings = persisted.sightings.map((s) =>
@@ -1254,15 +1336,25 @@ export const App: React.FC = () => {
 
     setPersisted((prev) => ({
       ...prev,
-      sightings: prev.sightings.map((s) =>
-        s.id === sighting.id
-          ? {
-              ...s,
-              syncStatus: result.finalSyncStatus,
-              lastSyncError: result.errorMessage,
-            }
-          : s
-      ),
+      sightings: prev.sightings.map((s) => {
+        const r2Photo = result.sightingPhotoUrls?.[s.id];
+        if (s.id === sighting.id) {
+          return {
+            ...s,
+            sanitizedPhotoDataUrl: r2Photo || s.sanitizedPhotoDataUrl,
+            syncStatus: result.finalSyncStatus,
+            lastSyncError: result.errorMessage,
+          };
+        }
+        return r2Photo ? { ...s, sanitizedPhotoDataUrl: r2Photo } : s;
+      }),
+      illustrations: result.illustrationUrls
+        ? prev.illustrations.map((ill) =>
+            result.illustrationUrls?.[ill.id]
+              ? { ...ill, imageUrl: result.illustrationUrls[ill.id] }
+              : ill
+          )
+        : prev.illustrations,
       notebooks: prev.notebooks.map((nb) =>
         nb.id === sighting.notebookId
           ? {
@@ -1334,7 +1426,7 @@ export const App: React.FC = () => {
 
   const handleSimulatePhoneSwitchRestore = async () => {
     const uid = persisted.user?.uid || 'google-valeria-ar-01';
-    const restored = await restoreFromGoogleCloudOnNewDevice(uid);
+    const restored = await restoreFromGoogleCloudOnNewDevice(uid, persisted.user);
     if (!restored || restored.notebooks.length === 0) {
       showToast('Aún no hay cuadernos respaldados en la nube para restaurar.');
       return;
@@ -1348,7 +1440,7 @@ export const App: React.FC = () => {
   };
 
   // ============================================================================
-  // Regenerar lámina + Editar / Eliminar avistamientos y cuadernos
+  // Regenerar lámina 100% IA + Editar / Eliminar avistamientos y cuadernos
   // ============================================================================
   const handleRegenerateSheetIllustration = async (
     sheet: NotebookSpeciesSheet,
@@ -1357,13 +1449,22 @@ export const App: React.FC = () => {
     if (!activeNotebook) return;
     setIsGeneratingPlate(true);
     try {
-      const { illustration } = await generateOrReuseIllustration({
+      const { illustration, aiError } = await generateOrReuseIllustration({
         taxonId: sheet.taxonId,
         style: activeNotebook.style,
         existingIllustrations: persisted.illustrations,
         forceNewVersion: true,
         fallbackPhotoDataUrl: fallbackPhoto,
       });
+
+      if (aiError) {
+        // Si ya había una ilustración válida anterior, no sobrescribirla con un error; si no, mostrar pendiente
+        const currentIll = persisted.illustrations.find((i) => i.id === sheet.activeIllustrationId);
+        if (currentIll && !currentIll.isPendingAi && !currentIll.modelProvider.toLowerCase().includes('local')) {
+          showToast(aiError);
+          return;
+        }
+      }
 
       const updatedSheet: NotebookSpeciesSheet = {
         ...sheet,
@@ -1385,9 +1486,13 @@ export const App: React.FC = () => {
         await syncSingleSightingWithFeedback(firstSighting, nextState);
       }
 
-      showToast(
-        `Versión #${illustration.version} de la lámina lista, conservando intactas tus fotografías.`
-      );
+      if (aiError) {
+        showToast(aiError);
+      } else {
+        showToast(
+          `Versión #${illustration.version} generada con IA (${illustration.modelProvider}), conservando intactas tus fotografías.`
+        );
+      }
     } finally {
       setIsGeneratingPlate(false);
     }
@@ -1523,11 +1628,20 @@ export const App: React.FC = () => {
         });
 
       const currentStillExists = nextSheets.some((sh) => sh.id === activeSheetId);
-      setPersisted((prev) => ({
-        ...prev,
+      const nextState: AppPersistedState = {
+        ...persisted,
         sightings: nextSightings,
         sheets: nextSheets,
-      }));
+      };
+      setPersisted(nextState);
+      if (persisted.user && isOnline) {
+        void syncFullStateToRemoteCloud({
+          uid: persisted.user.uid,
+          state: nextState,
+          isOnline: true,
+          fullSync: true,
+        });
+      }
       if (screen === 'sheet_detail' && !currentStillExists) {
         setActiveSheetId(null);
         setScreen('notebook_detail');
@@ -1536,12 +1650,21 @@ export const App: React.FC = () => {
     } else if (deleteConfirm.type === 'notebook') {
       const nbId = deleteConfirm.id;
       const nextNotebooks = persisted.notebooks.filter((n) => n.id !== nbId);
-      setPersisted((prev) => ({
-        ...prev,
+      const nextState: AppPersistedState = {
+        ...persisted,
         notebooks: nextNotebooks,
-        sheets: prev.sheets.filter((sh) => sh.notebookId !== nbId),
-        sightings: prev.sightings.filter((s) => s.notebookId !== nbId),
-      }));
+        sheets: persisted.sheets.filter((sh) => sh.notebookId !== nbId),
+        sightings: persisted.sightings.filter((s) => s.notebookId !== nbId),
+      };
+      setPersisted(nextState);
+      if (persisted.user && isOnline) {
+        void syncFullStateToRemoteCloud({
+          uid: persisted.user.uid,
+          state: nextState,
+          isOnline: true,
+          fullSync: true,
+        });
+      }
       setActiveNotebookId(nextNotebooks[0]?.id || null);
       setEditingNotebookMeta(false);
       setScreen(nextNotebooks.length > 0 ? 'library' : 'onboarding_first_notebook');
@@ -1551,7 +1674,7 @@ export const App: React.FC = () => {
   };
 
   // ============================================================================
-  // F08: Compartir cuaderno y revocar enlace
+  // F08: Compartir cuaderno y revocar enlace (sincronizado con Firestore + R2)
   // ============================================================================
   const handleActivateOrUpdateNotebookShare = (options: {
     includeOriginalPhotos: boolean;
@@ -1569,6 +1692,9 @@ export const App: React.FC = () => {
     const nextRevoked = [...activeNotebook.shareConfig.revokedTokens];
     if (options.regenerateToken && previousToken && previousToken !== nextToken) {
       revokePublicNotebookShareToken(previousToken);
+      if (persisted.user && isOnline) {
+        void revokePublicNotebookInRemoteCloud(persisted.user.uid, previousToken);
+      }
       nextRevoked.push(previousToken);
     }
 
@@ -1593,12 +1719,21 @@ export const App: React.FC = () => {
     };
     setPersisted(nextState);
 
-    publishOrUpdateSanitizedNotebookProjection(
+    const projection = publishOrUpdateSanitizedNotebookProjection(
       updatedNotebook,
       nextState.sheets,
       nextState.sightings,
       nextState.illustrations
     );
+    if (projection && persisted.user && isOnline) {
+      void publishSanitizedNotebookToRemoteCloud(persisted.user.uid, projection);
+      void syncFullStateToRemoteCloud({
+        uid: persisted.user.uid,
+        state: nextState,
+        isOnline: true,
+        fullSync: false,
+      });
+    }
 
     return nextToken;
   };
@@ -1607,6 +1742,9 @@ export const App: React.FC = () => {
     if (!activeNotebook || !activeNotebook.shareConfig.shareToken) return;
     const tokenToRevoke = activeNotebook.shareConfig.shareToken;
     revokePublicNotebookShareToken(tokenToRevoke);
+    if (persisted.user && isOnline) {
+      void revokePublicNotebookInRemoteCloud(persisted.user.uid, tokenToRevoke);
+    }
 
     const updatedNotebook: Notebook = {
       ...activeNotebook,
@@ -1619,12 +1757,21 @@ export const App: React.FC = () => {
       },
     };
 
-    setPersisted((prev) => ({
-      ...prev,
-      notebooks: prev.notebooks.map((nb) =>
+    const nextState: AppPersistedState = {
+      ...persisted,
+      notebooks: persisted.notebooks.map((nb) =>
         nb.id === updatedNotebook.id ? updatedNotebook : nb
       ),
-    }));
+    };
+    setPersisted(nextState);
+    if (persisted.user && isOnline) {
+      void syncFullStateToRemoteCloud({
+        uid: persisted.user.uid,
+        state: nextState,
+        isOnline: true,
+        fullSync: false,
+      });
+    }
   };
 
   // Helper de imagen de lámina para cualquier especie/hoja
@@ -3562,9 +3709,45 @@ export const App: React.FC = () => {
                       <span>v{activeIllustration.version}</span>
                     </div>
                   )}
+
+                  {activeIllustration &&
+                    (activeIllustration.isPendingAi ||
+                      activeIllustration.modelProvider.toLowerCase().includes('local')) && (
+                      <div className="ai-pending-plate-banner">
+                        <div style={{ fontSize: '0.82rem', color: '#5A4010', flex: 1 }}>
+                          <strong>
+                            {activeIllustration.isPendingAi
+                              ? 'Ilustración IA pendiente'
+                              : 'Lámina anterior (filtro local)'}
+                          </strong>
+                          <div style={{ marginTop: 2 }}>
+                            {activeIllustration.aiPendingReason ||
+                              'Esta lámina se creó con el filtro local anterior. Tocá el botón para generarla con un modelo de IA real.'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-compact"
+                          disabled={isGeneratingPlate}
+                          onClick={() =>
+                            void handleRegenerateSheetIllustration(
+                              activeSheet,
+                              primarySighting?.sanitizedPhotoDataUrl
+                            )
+                          }
+                        >
+                          {isGeneratingPlate ? (
+                            <Loader2 size={14} className="spin" />
+                          ) : (
+                            <Sparkles size={14} />
+                          )}
+                          Generar con IA
+                        </button>
+                      </div>
+                    )}
                 </div>
 
-                {/* RESUMEN ACOTADO (1–2 líneas) + FICHA DE CAMPO DESPLEGABLE */}
+                {/* RESUMEN ACOTADO (1–2 líneas) + ¿QUÉ BUSCA EN TU JARDÍN? + FICHA DE CAMPO DESPLEGABLE */}
                 <div className="sheet-summary-card">
                   <p className="sheet-quick-summary">
                     {species.quickSummary || species.identificationTraits}
@@ -3589,6 +3772,35 @@ export const App: React.FC = () => {
                       )}
                     </div>
                   )}
+
+                  {(() => {
+                    const gardenEco = getSpeciesGardenEcology(species);
+                    return (
+                      <div className="garden-ecology-card">
+                        <div className="garden-ecology-header">
+                          <Sprout size={14} /> ¿Qué viene a buscar a tu jardín?
+                        </div>
+                        <div className="garden-ecology-grid">
+                          <div className="garden-ecology-item">
+                            <span className="garden-ecology-label">🌿 Qué busca</span>
+                            <p>{gardenEco.seeksInGarden}</p>
+                          </div>
+                          <div className="garden-ecology-item">
+                            <span className="garden-ecology-label">🌸 Flores y plantas</span>
+                            <p>{gardenEco.preferredFlowers}</p>
+                          </div>
+                          <div className="garden-ecology-item">
+                            <span className="garden-ecology-label">🍋 Frutales y árboles</span>
+                            <p>{gardenEco.preferredFruitTrees}</p>
+                          </div>
+                          <div className="garden-ecology-item">
+                            <span className="garden-ecology-label">🪲 Qué come / insectos</span>
+                            <p>{gardenEco.insectsOrFoodEaten}</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <button
                     type="button"
@@ -3945,54 +4157,97 @@ export const App: React.FC = () => {
             {aiHealth?.aiConfigured ? (
               <div style={{ marginTop: 6, fontSize: '0.84rem', color: 'var(--ink-secondary)' }}>
                 <p style={{ margin: 0 }}>
-                  Visión conectada ({aiHealth.visionModel})
+                  Visión conectada (<strong>{aiHealth.visionModel}</strong>)
                   {aiHealth.visionFallbackProviders && aiHealth.visionFallbackProviders.length > 0
                     ? ` + respaldo ${aiHealth.visionFallbackProviders.join(' / ')}`
                     : ''}{' '}
                   + referencias reales de iNaturalist.
                 </p>
-                <p style={{ margin: '4px 0 0', fontSize: '0.8rem' }}>
+                <p style={{ margin: '5px 0 0', fontSize: '0.8rem' }}>
                   {aiHealth.imageFallbackProviders && aiHealth.imageFallbackProviders.length > 0 ? (
                     <>
-                      Ilustraciones IA: <strong>Gemini + {aiHealth.imageFallbackProviders.join(' / ')}</strong>{' '}
-                      activos.
+                      Ilustraciones 100% IA (Muralismo, Acuarela y Grafito):{' '}
+                      <strong>{aiHealth.imageFallbackProviders.join(' / ')} + Gemini</strong> activos (sin filtros locales).
                     </>
                   ) : (
                     <>
-                      Ilustraciones (Muralismo, Acuarela y Grafito): <strong>Gemini</strong> (requiere cuota de imagen) con respaldo
-                      automático de <strong>estudio artístico local</strong>. Para generación 100%
-                      IA sin tarjeta, podés agregar <code>HUGGINGFACE_API_KEY</code> en el
-                      servidor.
+                      Ilustraciones 100% IA (sin filtros locales): solo <strong>Gemini</strong> está configurado (su plan gratuito no incluye generación de imágenes). Agregá{' '}
+                      <code>CLOUDFLARE_ACCOUNT_ID</code> + <code>CLOUDFLARE_API_TOKEN</code> (gratis, FLUX.1) o activá facturación en Gemini.
                     </>
                   )}
                 </p>
               </div>
             ) : (
               <p style={{ margin: '6px 0 0', fontSize: '0.84rem', color: '#5A4010' }}>
-                Todavía falta agregar <code>GEMINI_API_KEY</code> en el archivo <code>.env</code>{' '}
-                del servidor para activar la identificación automática de fotografías y la
-                generación de láminas por IA. Las fotos de referencia de iNaturalist ya funcionan
-                sin clave.
+                Todavía falta agregar <code>GEMINI_API_KEY</code> en el servidor para activar la
+                identificación automática de fotografías y <code>CLOUDFLARE_ACCOUNT_ID</code> +{' '}
+                <code>CLOUDFLARE_API_TOKEN</code> (o facturación en Gemini) para ilustraciones 100% IA.
               </p>
             )}
+          </div>
+
+          {/* Estado de persistencia real en la nube (Firestore + Cloudflare R2) */}
+          <div
+            className={`callout-box ${
+              aiHealth?.cloudStorage?.firestoreConfigured && aiHealth?.cloudStorage?.r2BucketConfigured
+                ? ''
+                : 'warning'
+            }`}
+            style={{ marginBottom: 14 }}
+          >
+            <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+              <span
+                className={`ai-status-dot ${
+                  aiHealth?.cloudStorage?.firestoreConfigured ? 'ready' : 'pending'
+                }`}
+              />
+              Base de datos y bucket en la nube (Firestore + Cloudflare R2)
+            </div>
+            <div style={{ fontSize: '0.82rem', color: 'var(--ink-secondary)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <div>
+                • <strong>Firestore (cuadernos, fichas, enlaces públicos):</strong>{' '}
+                {aiHealth?.cloudStorage?.firestoreConfigured
+                  ? `Conectado (${aiHealth.cloudStorage.firestoreProjectId})`
+                  : 'Pendiente — agregá FIREBASE_SERVICE_ACCOUNT_JSON en el servidor'}
+              </div>
+              <div>
+                • <strong>Cloudflare R2 (bucket de fotos e ilustraciones):</strong>{' '}
+                {aiHealth?.cloudStorage?.r2BucketConfigured
+                  ? `Conectado (bucket ${aiHealth.cloudStorage.r2BucketName})`
+                  : 'Pendiente — agregá CLOUDFLARE_R2_* en el servidor'}
+              </div>
+            </div>
           </div>
 
           {/* Respaldo en la nube y cambio de teléfono */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, marginBottom: 18 }}>
             <div className="callout-box">
               <div style={{ fontWeight: 700, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Cloud size={16} /> Respaldo en Google
+                <Cloud size={16} /> Sincronización en la nube
               </div>
               <p style={{ fontSize: '0.83rem', margin: '0 0 10px', color: 'var(--ink-secondary)' }}>
-                Cada fotografía y nota queda respaldada de forma segura cuando hay conexión.
+                Cada fotografía, lámina y nota se respalda en tu cuenta (Firestore + Cloudflare R2 cuando están activos).
               </p>
               <button
                 type="button"
                 className="btn btn-primary btn-compact"
                 style={{ width: '100%' }}
-                onClick={() => void syncAllPendingSightings()}
+                onClick={async () => {
+                  await syncAllPendingSightings();
+                  if (persisted.user && isOnline) {
+                    const res = await syncFullStateToRemoteCloud({
+                      uid: persisted.user.uid,
+                      state: persisted,
+                      isOnline: true,
+                      fullSync: true,
+                    });
+                    if (res.configured && res.ok) {
+                      showToast('Sincronización completa confirmada en Firestore + Cloudflare R2.');
+                    }
+                  }
+                }}
               >
-                <UploadCloud size={15} /> Sincronizar pendientes
+                <UploadCloud size={15} /> Sincronizar todo ahora
               </button>
             </div>
 
