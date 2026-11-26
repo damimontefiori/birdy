@@ -35,10 +35,17 @@ import {
   revokePublicNotebookInCloud,
   syncUserStateToCloud,
   uploadDataUrlToR2,
+  uploadRawBufferToR2,
   type CloudSyncStatePayload,
 } from './cloudStorageService.ts';
+import {
+  isAllowedSoundProxyUrl,
+  resolveElevenLabsApiKey,
+  resolveSpeciesSound,
+} from './speciesSoundService.ts';
 
-const MAX_BODY_BYTES = 24 * 1024 * 1024; // 24 MB para sincronización segura de fotos sanitizadas
+const MAX_BODY_BYTES = 24 * 1024 * 1024; // 24 MB para sincronización JSON segura de fotos sanitizadas
+const MAX_MEDIA_BINARY_BYTES = 28 * 1024 * 1024; // 28 MB para videos cortos de jardín subidos a R2
 
 function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
   res.statusCode = statusCode;
@@ -54,14 +61,14 @@ function sendRedirect(res: ServerResponse, location: string): void {
   res.end();
 }
 
-async function readRawBody(req: IncomingMessage): Promise<string> {
+async function readRawBuffer(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
 
     req.on('data', (chunk: Buffer) => {
       total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
+      if (total > maxBytes) {
         reject(new Error('PAYLOAD_TOO_LARGE'));
         req.destroy();
         return;
@@ -70,11 +77,61 @@ async function readRawBody(req: IncomingMessage): Promise<string> {
     });
 
     req.on('end', () => {
-      resolve(Buffer.concat(chunks).toString('utf-8'));
+      resolve(Buffer.concat(chunks));
     });
 
     req.on('error', reject);
   });
+}
+
+async function readRawBody(req: IncomingMessage): Promise<string> {
+  const buf = await readRawBuffer(req, MAX_BODY_BYTES);
+  return buf.toString('utf-8');
+}
+
+/**
+ * Sirve un Buffer de audio o video soportando cabeceras HTTP Range (206 Partial Content),
+ * indispensable para que Safari iOS y Chrome Android reproduzcan y adelanten videos/sonidos.
+ */
+function sendMediaBufferWithRange(
+  req: IncomingMessage,
+  res: ServerResponse,
+  buffer: Buffer,
+  contentType: string,
+  cacheControl: string
+): void {
+  const total = buffer.length;
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', cacheControl);
+
+  const rangeHeader = req.headers.range;
+  if (rangeHeader && /^bytes=\d*-\d*$/.test(rangeHeader.trim())) {
+    const [startStr, endStr] = rangeHeader.trim().replace(/^bytes=/, '').split('-');
+    let start = startStr ? parseInt(startStr, 10) : 0;
+    let end = endStr ? parseInt(endStr, 10) : total - 1;
+    if (!startStr && endStr) {
+      start = Math.max(0, total - parseInt(endStr, 10));
+      end = total - 1;
+    }
+    if (isNaN(start) || isNaN(end) || start < 0 || start >= total || end < start) {
+      res.statusCode = 416;
+      res.setHeader('Content-Range', `bytes */${total}`);
+      res.end();
+      return;
+    }
+    end = Math.min(end, total - 1);
+    const slice = buffer.subarray(start, end + 1);
+    res.statusCode = 206;
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${total}`);
+    res.setHeader('Content-Length', String(slice.length));
+    res.end(slice);
+    return;
+  }
+
+  res.statusCode = 200;
+  res.setHeader('Content-Length', String(total));
+  res.end(buffer);
 }
 
 async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
@@ -154,7 +211,7 @@ export async function handleBirdyApiRequest(
     res.setHeader('Vary', 'Origin');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range, X-Sighting-Id, X-Media-Kind');
 
   if (method === 'OPTIONS') {
     res.statusCode = 204;
@@ -184,6 +241,7 @@ export async function handleBirdyApiRequest(
       provider: 'gemini',
       visionModel: resolveActiveVisionModel(env),
       imageModel: env.GEMINI_IMAGE_MODEL || 'gemini-3.1-flash-image',
+      soundAiFallbackConfigured: Boolean(resolveElevenLabsApiKey(env)),
       cloudStorage,
       auth: getAuthConfigStatus(env),
     });
@@ -543,6 +601,140 @@ export async function handleBirdyApiRequest(
     }
   }
 
+  // 9B. Sonidos reales de aves, polinizadores e insectos (iNaturalist + Wikimedia + respaldo ElevenLabs/R2)
+  if (pathname === '/api/species-sound' && method === 'GET') {
+    const env = resolveServerEnv();
+    const scientificName = (parsedUrl.searchParams.get('scientificName') || '').trim();
+    const commonNameAr = (parsedUrl.searchParams.get('commonNameAr') || '').trim();
+    const rawGroup = (parsedUrl.searchParams.get('organismGroup') || '').trim();
+
+    if (!scientificName) {
+      sendJson(res, 400, { error: 'MISSING_SPECIES' });
+      return true;
+    }
+
+    try {
+      const organismGroup = inferServerOrganismGroup({
+        organismGroup: rawGroup,
+        scientificName,
+        commonName: commonNameAr,
+      });
+      const sound = await resolveSpeciesSound(
+        { scientificName, commonNameAr: commonNameAr || scientificName, organismGroup },
+        env
+      );
+      sendJson(res, 200, sound);
+      return true;
+    } catch (err) {
+      console.error('[Bioma API] /api/species-sound error:', err instanceof Error ? err.message : err);
+      sendJson(res, 502, {
+        status: 'unavailable',
+        scientificName,
+        commonNameAr,
+        acousticSummary: 'No pudimos consultar el archivo sonoro en este momento.',
+        tracks: [],
+      });
+      return true;
+    }
+  }
+
+  // 9C. Proxy seguro de audio con soporte HTTP Range para reproducción fluida en Android / iOS
+  if (pathname === '/api/sound-proxy' && method === 'GET') {
+    const targetUrl = parsedUrl.searchParams.get('url') || '';
+    if (!isAllowedSoundProxyUrl(targetUrl)) {
+      sendJson(res, 403, { error: 'SOUND_HOST_NOT_ALLOWED' });
+      return true;
+    }
+    try {
+      const upstream = await serverFetch(targetUrl, {
+        headers: { 'User-Agent': 'BiomaCuadernoVivo/1.0' },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!upstream.ok) {
+        res.statusCode = upstream.status;
+        res.end();
+        return true;
+      }
+      const contentType = upstream.headers.get('content-type') || 'audio/mpeg';
+      const buffer = Buffer.from(await upstream.arrayBuffer());
+      sendMediaBufferWithRange(req, res, buffer, contentType, 'public, max-age=604800');
+      return true;
+    } catch {
+      res.statusCode = 502;
+      res.end();
+      return true;
+    }
+  }
+
+  // 10B. Subida binaria directa de videos cortos (y audios) a Cloudflare R2
+  if (pathname === '/api/cloud/upload-media' && method === 'POST') {
+    const env = resolveServerEnv();
+    if (enforceAiAuthGuard(req, res, env)) {
+      return true;
+    }
+    const status = getCloudStorageStatus(env);
+    if (!status.r2BucketConfigured) {
+      sendJson(res, 200, { configured: false, uploaded: false });
+      return true;
+    }
+
+    try {
+      const contentType = String(req.headers['content-type'] || 'video/mp4').split(';')[0].trim();
+      if (!contentType.startsWith('video/') && !contentType.startsWith('audio/')) {
+        sendJson(res, 400, { error: 'UNSUPPORTED_MEDIA_TYPE' });
+        return true;
+      }
+
+      const rawSightingId = String(
+        req.headers['x-sighting-id'] || parsedUrl.searchParams.get('sightingId') || `media_${Date.now()}`
+      ).replace(/[^a-zA-Z0-9_.\-]/g, '_');
+
+      const session = getAuthenticatedUserFromRequest(req, env);
+      const safeUid = (
+        session.status === 'ok'
+          ? session.user.uid
+          : parsedUrl.searchParams.get('uid') || 'google-valeria-ar-01'
+      ).replace(/[^a-zA-Z0-9_.\-:]/g, '_');
+
+      const buffer = await readRawBuffer(req, MAX_MEDIA_BINARY_BYTES);
+      if (buffer.length === 0) {
+        sendJson(res, 400, { error: 'EMPTY_MEDIA_BODY' });
+        return true;
+      }
+
+      const folder = contentType.startsWith('audio/') ? 'sounds' : 'videos';
+      const uploaded = await uploadRawBufferToR2({
+        keyPrefix: `users/${safeUid}/${folder}/${rawSightingId}`,
+        buffer,
+        mimeType: contentType,
+        env,
+      });
+
+      if (!uploaded) {
+        sendJson(res, 502, { error: 'R2_UPLOAD_FAILED' });
+        return true;
+      }
+
+      sendJson(res, 200, {
+        configured: true,
+        uploaded: true,
+        url: uploaded.url,
+        key: uploaded.key,
+      });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Error subiendo video';
+      const isTooLarge = msg === 'PAYLOAD_TOO_LARGE';
+      sendJson(res, isTooLarge ? 413 : 502, {
+        error: isTooLarge ? 'MEDIA_TOO_LARGE' : 'MEDIA_UPLOAD_FAILED',
+        message: isTooLarge
+          ? 'El video supera el tamaño máximo permitido (28 MB). Elegí un clip corto de jardín.'
+          : msg.slice(0, 200),
+      });
+      return true;
+    }
+  }
+
   // 10. Persistencia real en la nube: cargar estado desde Firestore (PROTEGIDO)
   if (pathname === '/api/cloud/state' && method === 'GET') {
     const env = resolveServerEnv();
@@ -726,13 +918,13 @@ export async function handleBirdyApiRequest(
         res.end();
         return true;
       }
-      res.statusCode = 200;
-      res.setHeader('Content-Type', obj.contentType);
-      res.setHeader(
-        'Cache-Control',
+      sendMediaBufferWithRange(
+        req,
+        res,
+        obj.buffer,
+        obj.contentType,
         key.startsWith('public/') ? 'public, max-age=31536000, immutable' : 'private, max-age=86400'
       );
-      res.end(obj.buffer);
       return true;
     } catch (err) {
       console.error('[Bioma API] /api/media error:', err instanceof Error ? err.message : err);

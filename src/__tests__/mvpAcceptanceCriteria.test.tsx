@@ -204,7 +204,7 @@ describe('Cuaderno de Aves MVP — Verificación de Criterios de Aceptación (CA
     // CA05: Ve la ficha de Hornero común con su nombre científico Furnarius rufus y la nota
     await waitFor(() => {
       expect(
-        screen.getByText(/Mis avistamientos de Hornero común \(1\)/i)
+        screen.getByText(/Registro en el tiempo de Hornero común \(1\)/i)
       ).toBeInTheDocument();
     });
     expect(screen.getByText('Furnarius rufus')).toBeInTheDocument();
@@ -212,9 +212,10 @@ describe('Cuaderno de Aves MVP — Verificación de Criterios de Aceptación (CA
       screen.getByText(/Caminando cerca de la galería al sol/i)
     ).toBeInTheDocument();
 
-    // CA06: Registrar un SEGUNDO Hornero en el mismo cuaderno
+    // CA06: Registrar un SEGUNDO Hornero desde el flujo general del cuaderno
+    fireEvent.click(screen.getByRole('button', { name: /^Cuaderno$/i }));
     fireEvent.click(
-      screen.getByRole('button', { name: /Agregar otro avistamiento/i })
+      await screen.findByRole('button', { name: /Registrar hallazgo/i })
     );
     fireEvent.click(
       screen.getByRole('button', {
@@ -246,7 +247,7 @@ describe('Cuaderno de Aves MVP — Verificación de Criterios de Aceptación (CA
 
     await waitFor(() => {
       expect(
-        screen.getByText(/Mis avistamientos de Hornero común \(2\)/i)
+        screen.getByText(/Registro en el tiempo de Hornero común \(2\)/i)
       ).toBeInTheDocument();
     });
   });

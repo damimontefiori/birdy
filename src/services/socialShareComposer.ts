@@ -5,6 +5,7 @@ import {
   ORGANISM_GROUP_META,
   OrganismGroup,
 } from '../types/domain';
+import { drawBotanicalArtworkFitted } from './plateAutoFramer';
 import { getProxiedImageUrl } from './speciesReferenceService';
 import { formatShortArgentineDate } from './storageAndSyncService';
 
@@ -106,6 +107,7 @@ export async function composeSocialShareCard(
   const isMural = options.style === 'muralismo_fauna';
   const isWatercolor = options.style === 'acuarela_naturalista';
   const isGraphite = options.style === 'lapiz_grafito';
+  const useSmartPlateFraming = isWatercolor || isGraphite;
   const styleMeta = ILLUSTRATION_STYLE_META[options.style] || ILLUSTRATION_STYLE_META.muralismo_fauna;
   const accentColor = isMural ? '#1F5A54' : isWatercolor ? '#38573E' : '#4A463F';
   const paperBg = isMural ? '#F2EBDC' : isWatercolor ? '#F6F1E4' : '#F3F0E8';
@@ -213,7 +215,7 @@ export async function composeSocialShareCard(
       const artY = 124;
       const artW = 924;
       const artH = 924;
-      drawMattedArtwork(ctx, illustrationImg, artX, artY, artW, artH, isGraphite);
+      drawMattedArtwork(ctx, illustrationImg, artX, artY, artW, artH, isGraphite, useSmartPlateFraming);
 
       // Bloque editorial de nombre (ajusta tipografía automáticamente para nunca cortar el título con "…")
       ctx.textAlign = 'center';
@@ -294,7 +296,7 @@ export async function composeSocialShareCard(
       const artY = 124;
       const artW = 936;
       const artH = 1100;
-      drawMattedArtwork(ctx, illustrationImg, artX, artY, artW, artH, isGraphite);
+      drawMattedArtwork(ctx, illustrationImg, artX, artY, artW, artH, isGraphite, useSmartPlateFraming);
 
       // Bloque editorial de título
       ctx.textAlign = 'center';
@@ -353,7 +355,7 @@ export async function composeSocialShareCard(
       const topY = 106;
       const diptychH = 716;
       const leftW = 588;
-      drawMattedArtwork(ctx, illustrationImg, 66, topY, leftW, diptychH, isGraphite);
+      drawMattedArtwork(ctx, illustrationImg, 66, topY, leftW, diptychH, isGraphite, useSmartPlateFraming);
 
       const rightX = 678;
       const rightW = 336;
@@ -449,7 +451,7 @@ export async function composeSocialShareCard(
       });
     } else {
       // SOLO ILUSTRACIÓN en 4:5: Gran lámina (948 × 764) — tamaño preservado intacto
-      drawMattedArtwork(ctx, illustrationImg, 66, 106, 948, 764, isGraphite);
+      drawMattedArtwork(ctx, illustrationImg, 66, 106, 948, 764, isGraphite, useSmartPlateFraming);
 
       ctx.textAlign = 'center';
       ctx.fillStyle = '#241F1B';
@@ -976,7 +978,8 @@ function drawMattedArtwork(
   y: number,
   w: number,
   h: number,
-  isGraphite: boolean
+  isGraphite: boolean,
+  enableSmartFraming = false
 ): void {
   ctx.save();
   ctx.fillStyle = 'rgba(42, 36, 28, 0.10)';
@@ -992,7 +995,7 @@ function drawMattedArtwork(
     if (isGraphite) {
       ctx.filter = 'grayscale(0.88) contrast(1.06) sepia(0.12)';
     }
-    drawImageCover(ctx, img, x, y, w, h);
+    drawBotanicalArtworkFitted(ctx, img, x, y, w, h, enableSmartFraming);
     ctx.filter = 'none';
   } else {
     ctx.fillStyle = '#EFE8D5';

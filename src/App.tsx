@@ -11,9 +11,11 @@ import {
   Cloud,
   CloudOff,
   Compass,
+  Crop,
   Download,
   Edit3,
   Eye,
+  Film,
   FolderOpen,
   Globe,
   HelpCircle,
@@ -21,8 +23,10 @@ import {
   Loader2,
   LogOut,
   MapPin,
+  Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings,
   Share2,
@@ -38,20 +42,29 @@ import {
   X,
   ZoomIn,
 } from 'lucide-react';
+import {
+  AddSheetEntryModal,
+  SubmittedSheetEntryPayload,
+} from './components/AddSheetEntryModal';
 import { GoogleSignInButton } from './components/GoogleSignInButton';
 import { ImageLightbox, LightboxItem } from './components/ImageLightbox';
+import { PhotoCropEditor } from './components/PhotoCropEditor';
 import { PublicNotebookView } from './components/PublicNotebookView';
 import { ShareNotebookModal } from './components/ShareNotebookModal';
 import { ShareSightingModal } from './components/ShareSightingModal';
 import { SpeciesComparisonModal } from './components/SpeciesComparisonModal';
 import { SpeciesReferenceThumb } from './components/SpeciesReferenceThumb';
+import { SpeciesSoundPlayer } from './components/SpeciesSoundPlayer';
 import {
   ARGENTINA_BIRDS_CATALOG,
+  buildStableTaxonIdFromScientificName,
+  findSpeciesByScientificName,
   findSpeciesByTaxonId,
   getAllKnownSpecies,
   getCustomSpeciesList,
   getSpeciesGardenEcology,
   getSpeciesGroup,
+  registerCustomSpecies,
   searchSpeciesCatalog,
 } from './data/argentinaBirdsCatalog';
 import {
@@ -74,6 +87,7 @@ import {
   sanitizeImageStrippingExif,
   toLocalDateTimeInputValue,
 } from './services/exifService';
+import { getCachedAutoFramedPlateUrl } from './services/plateAutoFramer';
 import { SAMPLE_TEST_PHOTOS, SampleTestPhoto } from './services/sampleGalleryPhotos';
 import {
   fetchReferencePhotosForSpecies,
@@ -81,7 +95,9 @@ import {
 } from './services/speciesReferenceService';
 import {
   AppPersistedState,
+  computeEarliestObservedAt,
   exportFullBackupJson,
+  formatArgentineDateTime,
   formatShortArgentineDate,
   importFullBackupJson,
   loadFullStateFromRemoteCloud,
@@ -94,9 +110,11 @@ import {
   revokePublicNotebookShareToken,
   saveLocalDeviceState,
   savePhotoBinaryToIndexedDb,
+  saveVideoBlobToIndexedDb,
   syncFullStateToRemoteCloud,
   syncSightingAndNotebookToCloud,
 } from './services/storageAndSyncService';
+import { formatVideoDuration } from './services/videoMediaService';
 import {
   AICandidate,
   ExifSuggestions,
@@ -201,8 +219,10 @@ export const App: React.FC = () => {
   const [notebookSearchQuery, setNotebookSearchQuery] = useState<string>('');
   const [notebookGroupFilter, setNotebookGroupFilter] = useState<OrganismGroup | 'todos'>('todos');
 
-  // Vista de lámina: modo visual protagonista + ficha de campo desplegable
+  // Vista de lámina: modo visual protagonista + entrada seleccionada en el tiempo + ficha desplegable
   const [sheetVisualMode, setSheetVisualMode] = useState<SheetVisualMode>('ambas');
+  const [selectedSheetEntryId, setSelectedSheetEntryId] = useState<string | null>(null);
+  const [showAddSheetEntryModal, setShowAddSheetEntryModal] = useState<boolean>(false);
   const [showFieldNotesAccordion, setShowFieldNotesAccordion] = useState<boolean>(false);
   const [sheetReferencePhotos, setSheetReferencePhotos] = useState<SpeciesReferencePhoto[]>([]);
 
@@ -230,7 +250,7 @@ export const App: React.FC = () => {
   const [nbTitle, setNbTitle] = useState<string>('Vida de mi jardín');
   const [nbType, setNbType] = useState<NotebookType>('jardin');
   const [nbStyle, setNbStyle] = useState<IllustrationStyle>('muralismo_fauna');
-  const [nbLocation, setNbLocation] = useState<string>('Tigre, Buenos Aires');
+  const [nbLocation, setNbLocation] = useState<string>('');
   const [nbPeriod, setNbPeriod] = useState<string>('Primavera 2026');
   const [nbDescription, setNbDescription] = useState<string>(
     'Mariposas, aves, abejas, insectos y pequeños vecinos que visitan el jardín.'
@@ -242,6 +262,10 @@ export const App: React.FC = () => {
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const [draftSightingId, setDraftSightingId] = useState<string>('');
   const [draftPhotoDataUrl, setDraftPhotoDataUrl] = useState<string>('');
+  const [draftOriginalPhotoDataUrl, setDraftOriginalPhotoDataUrl] = useState<string>('');
+  const [draftPhotoIsCropped, setDraftPhotoIsCropped] = useState<boolean>(false);
+  const [showPhotoCropEditor, setShowPhotoCropEditor] = useState<boolean>(false);
+  const [autoFramedPlates, setAutoFramedPlates] = useState<Record<string, string>>({});
   const [draftPhotoSha256, setDraftPhotoSha256] = useState<string>('');
   const [draftFileName, setDraftFileName] = useState<string>('');
   const [draftPresetScenario, setDraftPresetScenario] =
@@ -356,6 +380,8 @@ export const App: React.FC = () => {
     screen,
     guestShareToken,
     lightboxState,
+    showPhotoCropEditor,
+    showAddSheetEntryModal,
     compareTarget,
     deleteConfirm,
     shareSightingTarget,
@@ -370,6 +396,8 @@ export const App: React.FC = () => {
     screen,
     guestShareToken,
     lightboxState,
+    showPhotoCropEditor,
+    showAddSheetEntryModal,
     compareTarget,
     deleteConfirm,
     shareSightingTarget,
@@ -409,6 +437,16 @@ export const App: React.FC = () => {
       // 1. Prioridad máxima: cerrar visores, modales y menús abiertos
       if (cur.lightboxState) {
         setLightboxState(null);
+        ensureBaseGuard();
+        return;
+      }
+      if (cur.showPhotoCropEditor) {
+        setShowPhotoCropEditor(false);
+        ensureBaseGuard();
+        return;
+      }
+      if (cur.showAddSheetEntryModal) {
+        setShowAddSheetEntryModal(false);
         ensureBaseGuard();
         return;
       }
@@ -679,7 +717,7 @@ export const App: React.FC = () => {
       setNbTitle('Vida de mi jardín');
       setNbType('jardin');
       setNbStyle('muralismo_fauna');
-      setNbLocation('Tigre, Buenos Aires');
+      setNbLocation('');
       setNbPeriod('Primavera 2026');
       setNbDescription('Mariposas, aves, abejas, insectos y pequeños vecinos que visitan el jardín.');
       setScreen('onboarding_first_notebook');
@@ -828,13 +866,20 @@ export const App: React.FC = () => {
     setScreen('notebook_detail');
   };
 
-  const openSheetDetail = (sheetId: string) => {
+  const openSheetDetail = (sheetId: string, highlightEntryId: string | null = null) => {
     pushHistoryLayer('sheet_detail');
     setActiveSheetId(sheetId);
+    setSelectedSheetEntryId(highlightEntryId);
+    setShowAddSheetEntryModal(false);
     setSheetVisualMode('ambas');
     setShowFieldNotesAccordion(false);
     setEditingSightingId(null);
     setScreen('sheet_detail');
+  };
+
+  const openAddEntryToCurrentSheet = () => {
+    pushHistoryLayer('add_sheet_entry');
+    setShowAddSheetEntryModal(true);
   };
 
   const openLightbox = (items: LightboxItem[], index = 0) => {
@@ -887,7 +932,7 @@ export const App: React.FC = () => {
       setNbTitle('Vida de mi jardín');
       setNbType('jardin');
       setNbStyle('muralismo_fauna');
-      setNbLocation('Tigre, Buenos Aires');
+      setNbLocation('');
       setNbPeriod('Primavera 2026');
       setNbDescription('Mariposas, aves, abejas, insectos y pequeños vecinos que visitan el jardín.');
       setScreen('onboarding_first_notebook');
@@ -970,6 +1015,9 @@ export const App: React.FC = () => {
 
     setDraftSightingId(newId);
     setDraftPhotoDataUrl('');
+    setDraftOriginalPhotoDataUrl('');
+    setDraftPhotoIsCropped(false);
+    setShowPhotoCropEditor(false);
     setDraftPhotoSha256('');
     setDraftFileName('');
     setDraftPresetScenario('auto');
@@ -998,6 +1046,8 @@ export const App: React.FC = () => {
       setDraftFileName(file.name);
       setDraftPhotoSha256(sha256);
       setDraftPhotoDataUrl(sanitizedDataUrl);
+      setDraftOriginalPhotoDataUrl(sanitizedDataUrl);
+      setDraftPhotoIsCropped(false);
       setDraftPresetScenario('auto');
       setDraftExif(exif);
 
@@ -1025,6 +1075,8 @@ export const App: React.FC = () => {
     try {
       setDraftFileName(sample.fileName);
       setDraftPhotoDataUrl(sample.previewUrl);
+      setDraftOriginalPhotoDataUrl(sample.previewUrl);
+      setDraftPhotoIsCropped(false);
       setDraftPhotoSha256(`sha256_${sample.id}`);
       setDraftPresetScenario(sample.presetScenario);
       setDraftExif(sample.simulatedExif);
@@ -1050,6 +1102,37 @@ export const App: React.FC = () => {
   const handleDiscardExifLocation = () => {
     setDraftLocationLabel('');
     setDraftLocationAccepted(false);
+  };
+
+  const openPhotoCropEditor = () => {
+    pushHistoryLayer('crop_editor');
+    setShowPhotoCropEditor(true);
+  };
+
+  const handleApplyPhotoCrop = async (croppedDataUrl: string) => {
+    setDraftPhotoDataUrl(croppedDataUrl);
+    setDraftPhotoIsCropped(true);
+    setShowPhotoCropEditor(false);
+    try {
+      const croppedHash = await computeBlobSha256(new Blob([croppedDataUrl]));
+      setDraftPhotoSha256(croppedHash);
+    } catch {
+      setDraftPhotoSha256(`crop_${Date.now()}`);
+    }
+    showToast('Recorte aplicado a tu fotografía.');
+  };
+
+  const handleRestoreOriginalDraftPhoto = async () => {
+    if (!draftOriginalPhotoDataUrl) return;
+    setDraftPhotoDataUrl(draftOriginalPhotoDataUrl);
+    setDraftPhotoIsCropped(false);
+    try {
+      const origHash = await computeBlobSha256(new Blob([draftOriginalPhotoDataUrl]));
+      setDraftPhotoSha256(origHash);
+    } catch {
+      // mantener hash previo si el navegador restringe crypto
+    }
+    showToast('Se restauró la fotografía original.');
   };
 
   const handleSaveDraftAndProceed = async () => {
@@ -1249,6 +1332,8 @@ export const App: React.FC = () => {
         taxonId,
         identificationStatus: 'identificado',
         confirmedByUser: true,
+        mediaType: activeSightingForId.mediaType || 'photo',
+        speciesVerificationMode: 'initial_identification',
         syncStatus: isOnline ? 'subiendo' : 'local',
         updatedAt: new Date().toISOString(),
       };
@@ -1258,8 +1343,19 @@ export const App: React.FC = () => {
       const targetSheetId = existingSheet?.id || `${activeNotebook.id}_${taxonId}`;
 
       if (existingSheet) {
+        const sheetEntries = [
+          ...persisted.sightings.filter(
+            (s) =>
+              s.notebookId === activeNotebook.id &&
+              s.taxonId === taxonId &&
+              s.identificationStatus === 'identificado' &&
+              s.id !== confirmedSighting.id
+          ),
+          confirmedSighting,
+        ];
         const updatedSheet: NotebookSpeciesSheet = {
           ...existingSheet,
+          firstObservedAt: computeEarliestObservedAt(sheetEntries, existingSheet.firstObservedAt),
           sightingIds: existingSheet.sightingIds.includes(confirmedSighting.id)
             ? existingSheet.sightingIds
             : [...existingSheet.sightingIds, confirmedSighting.id],
@@ -1285,8 +1381,6 @@ export const App: React.FC = () => {
           taxonId,
           activeIllustrationId: illustration.id,
           firstObservedAt: confirmedSighting.observedAt,
-          generalPlace:
-            confirmedSighting.privateLocation?.label || activeNotebook.generalLocation,
           sightingIds: [confirmedSighting.id],
           updatedAt: new Date().toISOString(),
         };
@@ -1309,9 +1403,195 @@ export const App: React.FC = () => {
       };
       setPersisted(intermediateState);
       setDuplicateSpeciesPrompt(null);
-      openSheetDetail(targetSheetId);
+      openSheetDetail(targetSheetId, confirmedSighting.id);
 
       await syncSingleSightingWithFeedback(confirmedSighting, intermediateState);
+    } finally {
+      setIsGeneratingPlate(false);
+    }
+  };
+
+  /**
+   * Incorpora una nueva entrada en el tiempo (fotografía verificada por IA o video corto)
+   * directamente dentro de una hoja de especie existente — o en su propia hoja si la IA
+   * detectó otra especie y la usuaria eligió redirigirla.
+   */
+  const handleSaveEntryIntoSheet = async (entry: SubmittedSheetEntryPayload) => {
+    if (!activeSheet || !activeNotebook || !persisted.user) return;
+
+    const entryId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `entry_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+    const photoStorageKey = `photo_${entryId}`;
+    await savePhotoBinaryToIndexedDb(photoStorageKey, entry.sanitizedPhotoDataUrl, entry.photoSha256);
+
+    let videoStorageKey: string | undefined;
+    if (entry.mediaType === 'video' && entry.videoBlob) {
+      videoStorageKey = `video_${entryId}`;
+      await saveVideoBlobToIndexedDb(
+        videoStorageKey,
+        entry.videoBlob,
+        entry.videoMimeType || entry.videoBlob.type || 'video/mp4'
+      );
+    }
+
+    // Resolver especie destino (la de la hoja actual o la detectada por IA si eligió redirigirla)
+    let targetTaxonId = activeSheet.taxonId;
+    if (entry.redirectToDetectedCandidate) {
+      const cand = entry.redirectToDetectedCandidate;
+      const known =
+        findSpeciesByTaxonId(cand.taxonId) || findSpeciesByScientificName(cand.scientificName);
+      if (known) {
+        targetTaxonId = known.taxonId;
+      } else {
+        const customId = cand.taxonId || buildStableTaxonIdFromScientificName(cand.scientificName);
+        registerCustomSpecies({
+          taxonId: customId,
+          organismGroup: cand.organismGroup,
+          scientificName: cand.scientificName,
+          commonNameAr: cand.commonNameAr,
+          alternativeNames: cand.alternativeNames || [],
+          family: cand.family || 'Fauna',
+          quickSummary: cand.quickSummary || cand.reasoning,
+          sizeLabel: cand.sizeLabel,
+          habitatTag: cand.habitatTag,
+          dietTag: cand.dietTag,
+          ecologicalRole: cand.ecologicalRole,
+          coexistenceNote: cand.coexistenceNote,
+          gardenEcology: cand.gardenEcology,
+          identificationTraits: cand.identificationTraits || cand.reasoning,
+          typicalBehavior: cand.typicalBehavior || '',
+          dietAndHabitat: cand.dietAndHabitat || '',
+          generalDistribution: cand.generalDistribution || 'Argentina',
+          typicalRegionsAr: ['Argentina'],
+          referencePhotos: cand.referencePhotos,
+          wikipediaUrl: cand.wikipediaUrl,
+        });
+        targetTaxonId = customId;
+      }
+    }
+
+    const now = new Date().toISOString();
+    const newSighting: Sighting = {
+      id: entryId,
+      notebookId: activeNotebook.id,
+      ownerUid: persisted.user.uid,
+      taxonId: targetTaxonId,
+      identificationStatus: 'identificado',
+      syncStatus: isOnline ? 'subiendo' : 'local',
+      confidenceLevel: entry.mediaType === 'video' ? null : 'alta',
+      aiCandidates: entry.redirectToDetectedCandidate ? [entry.redirectToDetectedCandidate] : [],
+      aiExplanation: entry.aiExplanation || null,
+      aiUncertaintyReason: null,
+      confirmedByUser: true,
+      mediaType: entry.mediaType,
+      photoStorageKey,
+      sanitizedPhotoDataUrl: entry.sanitizedPhotoDataUrl,
+      photoSha256: entry.photoSha256,
+      videoStorageKey,
+      videoUrl: entry.videoObjectUrl,
+      videoDurationSec: entry.videoDurationSec,
+      videoMimeType: entry.videoMimeType,
+      speciesVerificationMode: entry.verificationMode,
+      observedAt: entry.observedAt,
+      createdAt: now,
+      updatedAt: now,
+      exifSuggestions: entry.exifSuggestions,
+      privateLocation: entry.locationLabel
+        ? {
+            label: entry.locationLabel,
+            lat: entry.exifSuggestions?.hasExifGps ? entry.exifSuggestions.suggestedLat : undefined,
+            lng: entry.exifSuggestions?.hasExifGps ? entry.exifSuggestions.suggestedLng : undefined,
+            fromExif: Boolean(entry.exifSuggestions?.hasExifGps),
+            acceptedByUser: true,
+          }
+        : null,
+      personalNote: entry.personalNote,
+      retryCount: 0,
+    };
+
+    setIsGeneratingPlate(true);
+    try {
+      let nextIllustrations = [...persisted.illustrations];
+      let nextSheets = [...persisted.sheets];
+      const existingTargetSheet = nextSheets.find(
+        (sh) => sh.notebookId === activeNotebook.id && sh.taxonId === targetTaxonId
+      );
+      const targetSheetId = existingTargetSheet?.id || `${activeNotebook.id}_${targetTaxonId}`;
+
+      if (existingTargetSheet) {
+        const allForTarget = [
+          ...persisted.sightings.filter(
+            (s) =>
+              s.notebookId === activeNotebook.id &&
+              s.taxonId === targetTaxonId &&
+              s.identificationStatus === 'identificado'
+          ),
+          newSighting,
+        ];
+        const updatedTargetSheet: NotebookSpeciesSheet = {
+          ...existingTargetSheet,
+          firstObservedAt: computeEarliestObservedAt(
+            allForTarget,
+            existingTargetSheet.firstObservedAt
+          ),
+          sightingIds: existingTargetSheet.sightingIds.includes(newSighting.id)
+            ? existingTargetSheet.sightingIds
+            : [...existingTargetSheet.sightingIds, newSighting.id],
+          updatedAt: now,
+        };
+        nextSheets = nextSheets.map((sh) =>
+          sh.id === updatedTargetSheet.id ? updatedTargetSheet : sh
+        );
+      } else {
+        const { illustration } = await generateOrReuseIllustration({
+          taxonId: targetTaxonId,
+          style: activeNotebook.style,
+          existingIllustrations: nextIllustrations,
+          forceNewVersion: false,
+          fallbackPhotoDataUrl: newSighting.sanitizedPhotoDataUrl,
+        });
+        if (!nextIllustrations.some((i) => i.id === illustration.id)) {
+          nextIllustrations.push(illustration);
+        }
+        nextSheets.push({
+          id: targetSheetId,
+          notebookId: activeNotebook.id,
+          taxonId: targetTaxonId,
+          activeIllustrationId: illustration.id,
+          firstObservedAt: newSighting.observedAt,
+          sightingIds: [newSighting.id],
+          updatedAt: now,
+        });
+      }
+
+      const nextSightings = [...persisted.sightings, newSighting];
+      const nextState: AppPersistedState = {
+        ...persisted,
+        customSpecies: getCustomSpeciesList(),
+        illustrations: nextIllustrations,
+        sheets: nextSheets,
+        sightings: nextSightings,
+      };
+
+      setPersisted(nextState);
+      setShowAddSheetEntryModal(false);
+      setActiveSheetId(targetSheetId);
+      setSelectedSheetEntryId(newSighting.id);
+
+      const targetSpeciesName =
+        findSpeciesByTaxonId(targetTaxonId)?.commonNameAr || 'la especie';
+      showToast(
+        entry.mediaType === 'video'
+          ? `Video corto incorporado a la hoja de ${targetSpeciesName}.`
+          : entry.redirectToDetectedCandidate
+            ? `Guardado en la hoja de ${targetSpeciesName}.`
+            : `¡Especie verificada! Nueva entrada sumada a ${targetSpeciesName}.`
+      );
+
+      await syncSingleSightingWithFeedback(newSighting, nextState);
     } finally {
       setIsGeneratingPlate(false);
     }
@@ -1338,15 +1618,23 @@ export const App: React.FC = () => {
       ...prev,
       sightings: prev.sightings.map((s) => {
         const r2Photo = result.sightingPhotoUrls?.[s.id];
+        const r2Video = result.sightingVideoUrls?.[s.id];
         if (s.id === sighting.id) {
           return {
             ...s,
             sanitizedPhotoDataUrl: r2Photo || s.sanitizedPhotoDataUrl,
+            videoUrl: r2Video || s.videoUrl,
             syncStatus: result.finalSyncStatus,
             lastSyncError: result.errorMessage,
           };
         }
-        return r2Photo ? { ...s, sanitizedPhotoDataUrl: r2Photo } : s;
+        return r2Photo || r2Video
+          ? {
+              ...s,
+              sanitizedPhotoDataUrl: r2Photo || s.sanitizedPhotoDataUrl,
+              videoUrl: r2Video || s.videoUrl,
+            }
+          : s;
       }),
       illustrations: result.illustrationUrls
         ? prev.illustrations.map((ill) =>
@@ -1588,13 +1876,31 @@ export const App: React.FC = () => {
       }
     }
 
+    const updatedSightings = persisted.sightings.map((s) =>
+      s.id === updatedSighting.id ? updatedSighting : s
+    );
+
+    // Recalcular firstObservedAt de las hojas afectadas a partir de sus entradas reales
+    const refreshedSheets = nextSheets.map((sh) => {
+      if (sh.notebookId !== activeNotebook.id) return sh;
+      const entries = updatedSightings.filter(
+        (s) =>
+          s.notebookId === sh.notebookId &&
+          s.taxonId === sh.taxonId &&
+          s.identificationStatus === 'identificado'
+      );
+      if (entries.length === 0) return sh;
+      return {
+        ...sh,
+        firstObservedAt: computeEarliestObservedAt(entries, sh.firstObservedAt),
+      };
+    });
+
     const nextState: AppPersistedState = {
       ...persisted,
       illustrations: nextIllustrations,
-      sheets: nextSheets,
-      sightings: persisted.sightings.map((s) =>
-        s.id === updatedSighting.id ? updatedSighting : s
-      ),
+      sheets: refreshedSheets,
+      sightings: updatedSightings,
     };
 
     setPersisted(nextState);
@@ -1613,10 +1919,21 @@ export const App: React.FC = () => {
       const targetId = deleteConfirm.id;
       const nextSightings = persisted.sightings.filter((s) => s.id !== targetId);
       const nextSheets = persisted.sheets
-        .map((sh) => ({
-          ...sh,
-          sightingIds: sh.sightingIds.filter((id) => id !== targetId),
-        }))
+        .map((sh) => {
+          const remainingEntries = nextSightings.filter(
+            (s) =>
+              s.notebookId === sh.notebookId &&
+              s.taxonId === sh.taxonId &&
+              s.identificationStatus === 'identificado'
+          );
+          return {
+            ...sh,
+            sightingIds: sh.sightingIds.filter((id) => id !== targetId),
+            firstObservedAt: computeEarliestObservedAt(remainingEntries, sh.firstObservedAt),
+            updatedAt:
+              sh.sightingIds.includes(targetId) ? new Date().toISOString() : sh.updatedAt,
+          };
+        })
         .filter((sh) => {
           const remaining = nextSightings.some(
             (s) =>
@@ -1774,8 +2091,8 @@ export const App: React.FC = () => {
     }
   };
 
-  // Helper de imagen de lámina para cualquier especie/hoja
-  const resolveSheetIllustrationUrl = (
+  // Helper de imagen original de lámina para cualquier especie/hoja
+  const resolveRawSheetIllustrationUrl = (
     sheet: NotebookSpeciesSheet,
     style: IllustrationStyle
   ): string => {
@@ -1809,6 +2126,49 @@ export const App: React.FC = () => {
       )?.sanitizedPhotoDataUrl ||
       '/plates/acuarela_hornero.jpg'
     );
+  };
+
+  // Reencuadre automático en memoria para láminas de Acuarela y Grafito con márgenes vacíos excesivos
+  useEffect(() => {
+    const candidateUrls = new Set<string>();
+    for (const sh of persisted.sheets) {
+      const nb = persisted.notebooks.find((n) => n.id === sh.notebookId);
+      if (!nb) continue;
+      if (nb.style !== 'acuarela_naturalista' && nb.style !== 'lapiz_grafito') continue;
+      const ill = persisted.illustrations.find((i) => i.id === sh.activeIllustrationId);
+      if (!ill?.imageUrl || ill.isPendingAi) continue;
+      const rawUrl = resolveRawSheetIllustrationUrl(sh, nb.style);
+      if (rawUrl && !autoFramedPlates[rawUrl] && !rawUrl.startsWith('data:image/svg')) {
+        candidateUrls.add(rawUrl);
+      }
+    }
+    if (candidateUrls.size === 0) return;
+
+    let active = true;
+    candidateUrls.forEach((rawUrl) => {
+      void getCachedAutoFramedPlateUrl(rawUrl, 1024).then((framedUrl) => {
+        if (!active || !framedUrl || framedUrl === rawUrl) return;
+        setAutoFramedPlates((prev) =>
+          prev[rawUrl] === framedUrl ? prev : { ...prev, [rawUrl]: framedUrl }
+        );
+      });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [persisted.illustrations, persisted.notebooks, persisted.sheets]);
+
+  // Helper de imagen de lámina para mostrar en cuadrícula, ficha y visor (con encuadre inteligente)
+  const resolveSheetIllustrationUrl = (
+    sheet: NotebookSpeciesSheet,
+    style: IllustrationStyle
+  ): string => {
+    const rawUrl = resolveRawSheetIllustrationUrl(sheet, style);
+    if (style === 'acuarela_naturalista' || style === 'lapiz_grafito') {
+      return autoFramedPlates[rawUrl] || rawUrl;
+    }
+    return rawUrl;
   };
 
   // ============================================================================
@@ -2128,6 +2488,9 @@ export const App: React.FC = () => {
                   onClick={() => {
                     setNbType('jardin');
                     if (nbTitle === 'Vacaciones en Lago Puelo') setNbTitle('Vida de mi jardín');
+                    if (nbLocation === 'Lago Puelo, Chubut' || nbLocation === 'Tigre, Buenos Aires') {
+                      setNbLocation('');
+                    }
                   }}
                 >
                   <Sprout size={15} /> Hogar / Jardín
@@ -2211,7 +2574,11 @@ export const App: React.FC = () => {
                   className="input-text"
                   value={nbLocation}
                   onChange={(e) => setNbLocation(e.target.value)}
-                  placeholder="Ej.: Tigre, Buenos Aires"
+                  placeholder={
+                    nbType === 'jardin'
+                      ? 'Ej.: San Antonio de Padua, Buenos Aires'
+                      : 'Ej.: Lago Puelo, Chubut'
+                  }
                 />
               </div>
 
@@ -2459,6 +2826,11 @@ export const App: React.FC = () => {
                       type="text"
                       className="input-text"
                       value={activeNotebook.generalLocation || ''}
+                      placeholder={
+                        activeNotebook.type === 'jardin'
+                          ? 'Ej.: San Antonio de Padua, Buenos Aires'
+                          : 'Ej.: Lago Puelo, Chubut'
+                      }
                       onChange={(e) =>
                         setPersisted((prev) => ({
                           ...prev,
@@ -2493,6 +2865,30 @@ export const App: React.FC = () => {
                     type="button"
                     className="btn btn-primary btn-compact"
                     onClick={() => {
+                      const nowIso = new Date().toISOString();
+                      const updatedState: AppPersistedState = {
+                        ...persisted,
+                        notebooks: persisted.notebooks.map((n) =>
+                          n.id === activeNotebook.id
+                            ? {
+                                ...n,
+                                title: n.title.trim() || 'Mi cuaderno',
+                                generalLocation: n.generalLocation?.trim() || undefined,
+                                period: n.period?.trim() || undefined,
+                                updatedAt: nowIso,
+                              }
+                            : n
+                        ),
+                      };
+                      setPersisted(updatedState);
+                      if (persisted.user && isOnline) {
+                        void syncFullStateToRemoteCloud({
+                          uid: persisted.user.uid,
+                          state: updatedState,
+                          isOnline: true,
+                          fullSync: false,
+                        });
+                      }
                       setEditingNotebookMeta(false);
                       showToast('Portada actualizada.');
                     }}
@@ -2902,6 +3298,28 @@ export const App: React.FC = () => {
                 </span>
               </button>
 
+              <div className="draft-photo-actions-row">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-compact"
+                  onClick={openPhotoCropEditor}
+                >
+                  <Crop size={15} /> Recortar / Acercar
+                </button>
+                {draftPhotoIsCropped && draftOriginalPhotoDataUrl && (
+                  <>
+                    <span className="badge badge-sync-respaldado">Recortada</span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-compact"
+                      onClick={() => void handleRestoreOriginalDraftPhoto()}
+                    >
+                      <RotateCcw size={14} /> Restaurar original
+                    </button>
+                  </>
+                )}
+              </div>
+
               {draftExif && (draftExif.hasExifDate || draftExif.hasExifGps) ? (
                 <div className="callout-box" style={{ fontSize: '0.84rem' }}>
                   <strong style={{ color: '#28402C' }}>
@@ -2960,7 +3378,7 @@ export const App: React.FC = () => {
                     setDraftLocationLabel(e.target.value);
                     setDraftLocationAccepted(Boolean(e.target.value.trim()));
                   }}
-                  placeholder="Opcional (ej.: Jardín de casa, Lago Puelo)"
+                  placeholder="Opcional (ej.: Jardín del fondo, Jardín del frente)"
                 />
               </div>
 
@@ -3498,11 +3916,18 @@ export const App: React.FC = () => {
               )
               .sort((a, b) => b.observedAt.localeCompare(a.observedAt));
 
-            const primarySighting = sheetSightings[0];
+            const featuredSighting =
+              sheetSightings.find((s) => s.id === selectedSheetEntryId) || sheetSightings[0];
+            const featuredEntryIdx = featuredSighting
+              ? Math.max(0, sheetSightings.findIndex((s) => s.id === featuredSighting.id))
+              : 0;
+            const featuredIsVideo =
+              featuredSighting?.mediaType === 'video' && Boolean(featuredSighting?.videoUrl);
 
             const buildGalleryItems = (): LightboxItem[] => [
               {
                 url: illustrationUrl,
+                mediaType: 'photo',
                 title: species.commonNameAr,
                 subtitle: `${species.scientificName} · ${
                   ILLUSTRATION_STYLE_META[activeNotebook.style]?.plateLabel ||
@@ -3512,14 +3937,17 @@ export const App: React.FC = () => {
               },
               ...sheetSightings.map((s, idx) => ({
                 url: s.sanitizedPhotoDataUrl,
-                title: `${species.commonNameAr} — Avistamiento #${sheetSightings.length - idx}`,
+                mediaType: s.mediaType || 'photo',
+                videoUrl: s.videoUrl,
+                title: `${species.commonNameAr} — Entrada #${sheetSightings.length - idx}`,
                 subtitle: [
-                  formatShortArgentineDate(s.observedAt),
+                  formatArgentineDateTime(s.observedAt),
+                  s.privateLocation?.label || null,
                   s.personalNote ? `«${s.personalNote}»` : null,
                 ]
                   .filter(Boolean)
                   .join(' · '),
-                badge: 'Tu foto',
+                badge: s.mediaType === 'video' ? 'Tu video' : 'Tu foto',
               })),
             ];
 
@@ -3543,7 +3971,7 @@ export const App: React.FC = () => {
                       onClick={() =>
                         void handleRegenerateSheetIllustration(
                           activeSheet,
-                          primarySighting?.sanitizedPhotoDataUrl
+                          featuredSighting?.sanitizedPhotoDataUrl
                         )
                       }
                       aria-label="Pedir otra versión de la ilustración"
@@ -3552,11 +3980,11 @@ export const App: React.FC = () => {
                       <RefreshCw size={16} className={isGeneratingPlate ? 'spin' : ''} />
                     </button>
 
-                    {primarySighting && (
+                    {featuredSighting && (
                       <button
                         type="button"
                         className="btn btn-primary btn-compact"
-                        onClick={() => openShareSighting(primarySighting, activeSheet)}
+                        onClick={() => openShareSighting(featuredSighting, activeSheet)}
                       >
                         <Share2 size={15} /> Compartir
                       </button>
@@ -3564,7 +3992,7 @@ export const App: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Encabezado limpio y editorial de la especie */}
+                {/* Encabezado limpio de la especie (registro vivo en el tiempo) */}
                 <div className="sheet-header-row">
                   <div>
                     {(() => {
@@ -3598,14 +4026,27 @@ export const App: React.FC = () => {
                         </>
                       )}
                       <span>·</span>
-                      <span>1.ª vez: {formatShortArgentineDate(activeSheet.firstObservedAt)}</span>
+                      <span>
+                        {sheetSightings.length}{' '}
+                        {sheetSightings.length === 1 ? 'entrada' : 'entradas'} · Desde{' '}
+                        {formatShortArgentineDate(activeSheet.firstObservedAt)}
+                      </span>
                     </div>
                   </div>
                 </div>
 
-                {/* PROTAGONISTAS: Ilustración + Fotografía Real (ampliables a pantalla completa) */}
+                {/* Reproductor bioacústico del sonido de la especie */}
+                <div style={{ marginBottom: 12 }}>
+                  <SpeciesSoundPlayer
+                    scientificName={species.scientificName}
+                    commonNameAr={species.commonNameAr}
+                    organismGroup={getSpeciesGroup(species)}
+                  />
+                </div>
+
+                {/* PROTAGONISTAS: Ilustración + Entrada Seleccionada en el Tiempo */}
                 <div className="sheet-hero-showcase">
-                  {primarySighting && (
+                  {featuredSighting && (
                     <div className="segmented-control" role="tablist" aria-label="Vista principal">
                       <button
                         type="button"
@@ -3632,12 +4073,12 @@ export const App: React.FC = () => {
                         className={`segmented-btn ${sheetVisualMode === 'foto' ? 'active' : ''}`}
                         onClick={() => setSheetVisualMode('foto')}
                       >
-                        Mi foto
+                        {featuredIsVideo ? 'Mi video' : 'Mi foto'}
                       </button>
                     </div>
                   )}
 
-                  {sheetVisualMode === 'ambas' && primarySighting ? (
+                  {sheetVisualMode === 'ambas' && featuredSighting ? (
                     <div className="hero-dual-grid">
                       <button
                         type="button"
@@ -3657,35 +4098,66 @@ export const App: React.FC = () => {
                       <button
                         type="button"
                         className="hero-stage-card"
-                        onClick={() => openLightbox(buildGalleryItems(), 1)}
-                        aria-label={`Ampliar fotografía original de ${species.commonNameAr}`}
+                        onClick={() => openLightbox(buildGalleryItems(), featuredEntryIdx + 1)}
+                        aria-label={
+                          featuredIsVideo
+                            ? `Reproducir video de ${species.commonNameAr}`
+                            : `Ampliar fotografía original de ${species.commonNameAr}`
+                        }
                       >
                         <img
-                          src={primarySighting.sanitizedPhotoDataUrl}
-                          alt={`Fotografía original de ${species.commonNameAr}`}
+                          src={featuredSighting.sanitizedPhotoDataUrl}
+                          alt={`Registro de ${species.commonNameAr}`}
                         />
-                        <span className="hero-corner-tag">Tu foto</span>
+                        <span className="hero-corner-tag">
+                          {featuredIsVideo
+                            ? `Video · ${formatVideoDuration(featuredSighting.videoDurationSec)}`
+                            : sheetSightings.length > 1
+                              ? `Entrada #${sheetSightings.length - featuredEntryIdx}`
+                              : 'Tu foto'}
+                        </span>
                         <span className="zoom-pill">
-                          <ZoomIn size={12} /> Ampliar
+                          {featuredIsVideo ? (
+                            <>
+                              <Play size={12} /> Reproducir
+                            </>
+                          ) : (
+                            <>
+                              <ZoomIn size={12} /> Ampliar
+                            </>
+                          )}
                         </span>
                       </button>
                     </div>
-                  ) : sheetVisualMode === 'foto' && primarySighting ? (
+                  ) : sheetVisualMode === 'foto' && featuredSighting ? (
                     <div className="hero-single-stage">
-                      <button
-                        type="button"
-                        className="hero-stage-card"
-                        onClick={() => openLightbox(buildGalleryItems(), 1)}
-                        aria-label={`Ampliar fotografía original de ${species.commonNameAr}`}
-                      >
-                        <img
-                          src={primarySighting.sanitizedPhotoDataUrl}
-                          alt={`Fotografía original de ${species.commonNameAr}`}
-                        />
-                        <span className="zoom-pill">
-                          <ZoomIn size={13} /> Ampliar foto
-                        </span>
-                      </button>
+                      {featuredIsVideo ? (
+                        <div className="hero-video-stage">
+                          <video
+                            key={featuredSighting.videoUrl}
+                            src={featuredSighting.videoUrl}
+                            poster={featuredSighting.sanitizedPhotoDataUrl}
+                            controls
+                            playsInline
+                            className="hero-inline-video"
+                          />
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="hero-stage-card"
+                          onClick={() => openLightbox(buildGalleryItems(), featuredEntryIdx + 1)}
+                          aria-label={`Ampliar fotografía original de ${species.commonNameAr}`}
+                        >
+                          <img
+                            src={featuredSighting.sanitizedPhotoDataUrl}
+                            alt={`Fotografía original de ${species.commonNameAr}`}
+                          />
+                          <span className="zoom-pill">
+                            <ZoomIn size={13} /> Ampliar foto
+                          </span>
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="hero-single-stage">
@@ -3702,6 +4174,40 @@ export const App: React.FC = () => {
                       </button>
                     </div>
                   )}
+
+                  {/* Selector rápido de entradas en el tiempo + botón directo para sumar foto/video */}
+                  <div className="sheet-entry-cta-bar">
+                    {sheetSightings.length > 1 && (
+                      <div className="entry-selector-pills" role="tablist" aria-label="Entradas registradas en el tiempo">
+                        {sheetSightings.map((s, idx) => {
+                          const num = sheetSightings.length - idx;
+                          const isSel = featuredSighting?.id === s.id;
+                          return (
+                            <button
+                              key={s.id}
+                              type="button"
+                              role="tab"
+                              aria-selected={isSel}
+                              className={`entry-pill-btn ${isSel ? 'active' : ''}`}
+                              onClick={() => setSelectedSheetEntryId(s.id)}
+                            >
+                              {s.mediaType === 'video' ? <Film size={12} /> : <Camera size={12} />} #{num} ·{' '}
+                              {formatShortArgentineDate(s.observedAt)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-compact"
+                      style={{ width: '100%' }}
+                      onClick={openAddEntryToCurrentSheet}
+                    >
+                      <Plus size={16} /> Sumar foto o video a esta hoja
+                    </button>
+                  </div>
 
                   {activeIllustration && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--ink-muted)' }}>
@@ -3732,7 +4238,7 @@ export const App: React.FC = () => {
                           onClick={() =>
                             void handleRegenerateSheetIllustration(
                               activeSheet,
-                              primarySighting?.sanitizedPhotoDataUrl
+                              featuredSighting?.sanitizedPhotoDataUrl
                             )
                           }
                         >
@@ -3870,61 +4376,93 @@ export const App: React.FC = () => {
                   )}
                 </div>
 
-                {/* HISTORIAL DE AVISTAMIENTOS REALES */}
+                {/* REGISTRO EN EL TIEMPO: Cada entrada conserva su propia Fecha/Hora, Ubicación y Nota */}
                 <div style={{ marginTop: 22, borderTop: '1px solid var(--paper-edge)', paddingTop: 16 }}>
                   <div
                     style={{
                       display: 'flex',
                       justifyContent: 'space-between',
-                      alignItems: 'center',
+                      alignItems: 'flex-start',
                       flexWrap: 'wrap',
                       gap: 8,
                       marginBottom: 12,
                     }}
                   >
-                    <h3 className="serif-heading" style={{ fontSize: '1.45rem', margin: 0 }}>
-                      Mis avistamientos de {species.commonNameAr} ({sheetSightings.length})
-                    </h3>
+                    <div>
+                      <h3 className="serif-heading" style={{ fontSize: '1.45rem', margin: 0 }}>
+                        Registro en el tiempo de {species.commonNameAr} ({sheetSightings.length})
+                      </h3>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--ink-secondary)' }}>
+                        Cada foto o video conserva su propia fecha y hora, ubicación aproximada y nota personal.
+                      </span>
+                    </div>
                     <button
                       type="button"
-                      className="btn btn-secondary btn-compact"
-                      onClick={() => startAddSightingFlow(activeNotebook.id)}
+                      className="btn btn-primary btn-compact"
+                      onClick={openAddEntryToCurrentSheet}
                     >
-                      <Plus size={15} /> Agregar otro avistamiento
+                      <Plus size={15} /> Nueva entrada
                     </button>
                   </div>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {sheetSightings.map((s, idx) => {
                       const isEditing = editingSightingId === s.id;
+                      const isVideoEntry = s.mediaType === 'video';
+                      const isFeatured = featuredSighting?.id === s.id && sheetSightings.length > 1;
                       return (
-                        <div key={s.id} className="sighting-history-card">
+                        <div
+                          key={s.id}
+                          className={`sighting-history-card ${isFeatured ? 'sighting-active-highlight' : ''}`}
+                        >
                           <div className="sighting-history-top">
                             <button
                               type="button"
                               className="sighting-photo-trigger"
                               onClick={() => openLightbox(buildGalleryItems(), idx + 1)}
-                              aria-label={`Ampliar foto del avistamiento #${sheetSightings.length - idx}`}
+                              aria-label={
+                                isVideoEntry
+                                  ? `Reproducir video de la entrada #${sheetSightings.length - idx}`
+                                  : `Ampliar foto del avistamiento #${sheetSightings.length - idx}`
+                              }
                             >
                               <img
                                 src={s.sanitizedPhotoDataUrl}
-                                alt={`Fotografía original de ${species.commonNameAr}`}
+                                alt={`Registro de ${species.commonNameAr}`}
                               />
-                              <span className="thumb-zoom-dot">
-                                <ZoomIn size={12} />
-                              </span>
+                              {isVideoEntry ? (
+                                <span className="sighting-video-badge">
+                                  <Play size={11} /> {formatVideoDuration(s.videoDurationSec)}
+                                </span>
+                              ) : (
+                                <span className="thumb-zoom-dot">
+                                  <ZoomIn size={12} />
+                                </span>
+                              )}
                             </button>
 
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                 <strong style={{ fontSize: '0.9rem' }}>
-                                  #{sheetSightings.length - idx} · {formatShortArgentineDate(s.observedAt)}
+                                  #{sheetSightings.length - idx} · {formatArgentineDateTime(s.observedAt)}
                                 </strong>
-                                {renderSyncBadge(s.syncStatus)}
+                                <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+                                  {s.speciesVerificationMode === 'ai_verified_match' && (
+                                    <span className="badge badge-sync-respaldado" title="La IA verificó que corresponde a esta especie">
+                                      <CheckCircle2 size={11} /> IA verificada
+                                    </span>
+                                  )}
+                                  {isVideoEntry && (
+                                    <span className="badge badge-subtle">
+                                      <Film size={11} /> Video
+                                    </span>
+                                  )}
+                                  {renderSyncBadge(s.syncStatus)}
+                                </div>
                               </div>
 
                               {s.privateLocation?.label && (
-                                <div style={{ fontSize: '0.78rem', color: 'var(--ink-muted)', marginTop: 2 }}>
+                                <div style={{ fontSize: '0.78rem', color: 'var(--ink-muted)', marginTop: 3 }}>
                                   <MapPin size={12} style={{ verticalAlign: 'middle' }} />{' '}
                                   {s.privateLocation.label}
                                 </div>
@@ -3938,7 +4476,9 @@ export const App: React.FC = () => {
                                     </div>
                                   ) : (
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-muted)', marginTop: 5 }}>
-                                      Tocá la foto para ampliarla o agregá una nota personal.
+                                      {isVideoEntry
+                                        ? 'Tocá la miniatura para reproducir el video o editá los datos de esta entrada.'
+                                        : 'Tocá la foto para ampliarla o agregá una nota personal a esta entrada.'}
                                     </div>
                                   )}
                                 </>
@@ -4010,6 +4550,15 @@ export const App: React.FC = () => {
                             </div>
                           ) : (
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {sheetSightings.length > 1 && featuredSighting?.id !== s.id && (
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-compact"
+                                  onClick={() => setSelectedSheetEntryId(s.id)}
+                                >
+                                  <Eye size={13} /> Destacar arriba
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className="btn btn-secondary btn-compact"
@@ -4507,6 +5056,30 @@ export const App: React.FC = () => {
         />
       )}
 
+      {/* Modal Sumar Nueva Entrada (Foto verificada por IA o Video corto) en una Hoja existente */}
+      {showAddSheetEntryModal && activeSheet && activeNotebook && (() => {
+        const sheetSpecies = findSpeciesByTaxonId(activeSheet.taxonId);
+        if (!sheetSpecies) return null;
+        return (
+          <AddSheetEntryModal
+            species={sheetSpecies}
+            notebookGeneralLocation={activeNotebook.generalLocation}
+            isOnline={isOnline}
+            onSaveEntry={(payload) => handleSaveEntryIntoSheet(payload)}
+            onClose={() => setShowAddSheetEntryModal(false)}
+          />
+        );
+      })()}
+
+      {/* Modal Editor de Recorte y Zoom para fotografía al registrar hallazgo */}
+      {showPhotoCropEditor && (draftOriginalPhotoDataUrl || draftPhotoDataUrl) && (
+        <PhotoCropEditor
+          sourceImageUrl={draftOriginalPhotoDataUrl || draftPhotoDataUrl}
+          onApplyCrop={(croppedUrl) => void handleApplyPhotoCrop(croppedUrl)}
+          onClose={() => setShowPhotoCropEditor(false)}
+        />
+      )}
+
       {/* Visor Lightbox a pantalla completa */}
       {lightboxState && (
         <ImageLightbox
@@ -4565,7 +5138,7 @@ export const App: React.FC = () => {
             findSpeciesByTaxonId(shareSightingTarget.sheet.taxonId) || ARGENTINA_BIRDS_CATALOG[0]
           }
           sighting={shareSightingTarget.sighting}
-          illustrationUrl={resolveSheetIllustrationUrl(
+          illustrationUrl={resolveRawSheetIllustrationUrl(
             shareSightingTarget.sheet,
             activeNotebook.style
           )}

@@ -16,6 +16,7 @@ import {
   ORGANISM_GROUPS_ORDER,
 } from '../types/domain';
 import { generateOrReuseIllustration, identifyBirdFromPhoto } from '../services/aiBirdService';
+import { computeAutoFrameCrop } from '../services/plateAutoFramer';
 import {
   exportFullBackupJson,
   importFullBackupJson,
@@ -44,6 +45,10 @@ import {
   isValidMediaObjectKey,
   jsToFirestoreValue,
 } from '../../server/cloudStorageService';
+import {
+  classifySpeciesAcousticProfile,
+  isAllowedSoundProxyUrl,
+} from '../../server/speciesSoundService';
 
 describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y visor ampliado', () => {
   beforeEach(() => {
@@ -487,5 +492,280 @@ describe('Birdy — Mejoras de detección, comparación visual, ficha compacta y
     const emptyCloud = getCloudStorageStatus({});
     expect(emptyCloud.firestoreConfigured).toBe(false);
     expect(emptyCloud.r2BucketConfigured).toBe(false);
+  });
+
+  it('Deja vacío "Lugar general (opcional)" en Vida de mi jardín con placeholder correcto y limpia "Lago Puelo, Chubut" al cambiar a Jardín', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /Ingresar con mi cuenta de Google/i }));
+
+    // Onboarding inicial: "Vida de mi jardín" no debe venir autocompletado
+    const locInput = (await screen.findByLabelText(/Lugar general \(opcional\)/i)) as HTMLInputElement;
+    expect(locInput.value).toBe('');
+    expect(locInput.placeholder).toBe('Ej.: San Antonio de Padua, Buenos Aires');
+
+    // Crear el cuaderno y probar "+ Nuevo cuaderno" -> cambiar a "Hogar / Jardín"
+    fireEvent.click(screen.getByRole('button', { name: /Crear cuaderno y abrir portada/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Todos mis cuadernos/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Nuevo cuaderno \(Jardín o Viaje\)/i }));
+
+    const locInCreate = (await screen.findByLabelText(/Lugar general \(opcional\)/i)) as HTMLInputElement;
+    expect(locInCreate.value).toBe('Lago Puelo, Chubut');
+
+    fireEvent.click(screen.getByRole('button', { name: /Hogar \/ Jardín/i }));
+    expect(locInCreate.value).toBe('');
+    expect(locInCreate.placeholder).toBe('Ej.: San Antonio de Padua, Buenos Aires');
+  });
+
+  it('Muestra el placeholder actualizado en Registrar hallazgo y permite recortar/acercar la fotografía', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /Ingresar con mi cuenta de Google/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Crear cuaderno y abrir portada/i }));
+
+    fireEvent.click(await screen.findByRole('button', { name: /Registrar mi primer hallazgo/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Chingolo en rama \(Foto nítida · Sin EXIF\)/i }));
+
+    const obsLocInput = (await screen.findByLabelText(/Ubicación aproximada \(privada\)/i)) as HTMLInputElement;
+    expect(obsLocInput.placeholder).toBe('Opcional (ej.: Jardín del fondo, Jardín del frente)');
+
+    // Abrir editor de recorte y zoom
+    const cropBtn = screen.getByRole('button', { name: /Recortar \/ Acercar/i });
+    fireEvent.click(cropBtn);
+
+    const dialog = await screen.findByRole('dialog', { name: /Recortar y acercar fotografía/i });
+    expect(dialog).toBeInTheDocument();
+
+    const zoomSlider = screen.getByLabelText(/Nivel de zoom/i) as HTMLInputElement;
+    fireEvent.change(zoomSlider, { target: { value: '1.8' } });
+    expect(screen.getByText('180%')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Girar 90°/i }));
+    fireEvent.click(screen.getByRole('tab', { name: '4:3' }));
+    fireEvent.click(screen.getByRole('button', { name: /Aplicar recorte/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /Recortar y acercar fotografía/i })).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Restaurar original/i })).toBeInTheDocument();
+  });
+
+  it('Encuadra inteligentemente láminas de Acuarela/Grafito pequeñas y pide encuadre amplio en los prompts', () => {
+    // Sujeto tipo geco pequeño centrado en una lámina 1024×1024
+    const smallGecko = {
+      bgR: 250,
+      bgG: 246,
+      bgB: 233,
+      bgCss: 'rgb(250, 246, 233)',
+      left: 0.2,
+      top: 0.36,
+      right: 0.8,
+      bottom: 0.72,
+    };
+
+    const storyCrop = computeAutoFrameCrop({
+      imgW: 1024,
+      imgH: 1024,
+      targetW: 924,
+      targetH: 924,
+      subject: smallGecko,
+    });
+    expect(storyCrop).not.toBeNull();
+    // Debe acercar para que el sujeto ocupe ~87% del ancho (cropW ≈ 0.60 / 0.87 * 1024 ≈ 706)
+    expect(storyCrop!.cropW).toBeLessThan(740);
+    expect(storyCrop!.cropW).toBeGreaterThan(680);
+
+    // En Feed 4:5 (588×716), incluso una lámina ya grande horizontal (0.06..0.94) no debe recortar cola ni cabeza
+    const wideAlreadyLarge = {
+      bgR: 250,
+      bgG: 246,
+      bgB: 233,
+      bgCss: 'rgb(250, 246, 233)',
+      left: 0.06,
+      top: 0.26,
+      right: 0.94,
+      bottom: 0.74,
+    };
+    const feedCrop = computeAutoFrameCrop({
+      imgW: 1024,
+      imgH: 1024,
+      targetW: 588,
+      targetH: 716,
+      subject: wideAlreadyLarge,
+    });
+    expect(feedCrop).not.toBeNull();
+    expect(feedCrop!.cropX).toBeLessThanOrEqual(wideAlreadyLarge.left * 1024);
+    expect(feedCrop!.cropX + feedCrop!.cropW).toBeGreaterThanOrEqual(wideAlreadyLarge.right * 1024);
+
+    // Sujeto cuadrado centrado que ya llena el 86% no requiere reencuadre
+    const alreadyFilled = {
+      bgR: 250,
+      bgG: 246,
+      bgB: 233,
+      bgCss: 'rgb(250, 246, 233)',
+      left: 0.07,
+      top: 0.07,
+      right: 0.93,
+      bottom: 0.93,
+    };
+    expect(
+      computeAutoFrameCrop({
+        imgW: 1024,
+        imgH: 1024,
+        targetW: 924,
+        targetH: 924,
+        subject: alreadyFilled,
+      })
+    ).toBeNull();
+
+    // Prompts actualizados para Acuarela y Grafito piden ocupar 80%–86% del lienzo sin grandes márgenes vacíos
+    const wc = buildNaturalistIllustrationPrompt({
+      commonNameAr: 'Geco tosco',
+      scientificName: 'Homonota darwinii',
+      identificationTraits: 'Cuerpo rugoso moteado pardo y crema sobre piedra musgosa',
+      style: 'acuarela_naturalista',
+      organismGroup: 'fauna_vecina',
+    });
+    expect(wc).toContain('80% to 86%');
+    expect(wc).not.toContain('generous clean ivory paper margins');
+
+    const gr = buildNaturalistIllustrationPrompt({
+      commonNameAr: 'Geco tosco',
+      scientificName: 'Homonota darwinii',
+      identificationTraits: 'Cuerpo rugoso moteado pardo y crema sobre piedra musgosa',
+      style: 'lapiz_grafito',
+      organismGroup: 'fauna_vecina',
+    });
+    expect(gr).toContain('80% to 86%');
+    expect(gr).not.toContain('generous clean archival paper margins');
+  });
+
+  it('Clasifica perfiles bioacústicos con rigor (aves, polinizadores, insectos vs especies silenciosas) y protege el proxy de audio', () => {
+    const bird = classifySpeciesAcousticProfile({
+      scientificName: 'Furnarius rufus',
+      commonNameAr: 'Hornero común',
+      organismGroup: 'aves',
+    });
+    expect(bird.kind).toBe('vocal_bird');
+    expect(bird.elevenLabsPrompt).toContain('NO human voice');
+
+    const bee = classifySpeciesAcousticProfile({
+      scientificName: 'Bombus pauloensis',
+      commonNameAr: 'Abejorro negro y amarillo',
+      organismGroup: 'abejas_abejorros',
+    });
+    expect(bee.kind).toBe('buzzing_pollinator');
+    expect(bee.elevenLabsPrompt).toContain('NO human voice');
+
+    const cricket = classifySpeciesAcousticProfile({
+      scientificName: 'Gryllus assimilis',
+      commonNameAr: 'Grillo común de jardín',
+      organismGroup: 'insectos_aracnidos',
+    });
+    expect(cricket.kind).toBe('stridulating_insect');
+
+    const butterfly = classifySpeciesAcousticProfile({
+      scientificName: 'Danaus erippus',
+      commonNameAr: 'Mariposa monarca del sur',
+      organismGroup: 'mariposas',
+    });
+    expect(butterfly.kind).toBe('silent');
+    expect(butterfly.silentExplanation).toContain('silenciosas');
+
+    const spider = classifySpeciesAcousticProfile({
+      scientificName: 'Argiope argentata',
+      commonNameAr: 'Araña tigre plateada',
+      organismGroup: 'insectos_aracnidos',
+    });
+    expect(spider.kind).toBe('silent');
+
+    expect(isAllowedSoundProxyUrl('https://static.inaturalist.org/sounds/2231243.m4a')).toBe(true);
+    expect(isAllowedSoundProxyUrl('https://upload.wikimedia.org/wikipedia/commons/e/ec/song.mp3')).toBe(true);
+    expect(isAllowedSoundProxyUrl('http://127.0.0.1:8080/internal.mp3')).toBe(false);
+    expect(isAllowedSoundProxyUrl('https://evil.example.com/fake.mp3')).toBe(false);
+  });
+
+  it('Convierte cada hoja en un registro en el tiempo con reproductor de sonido, verificación IA al sumar foto, desvío si es otra especie y soporte de videos cortos', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /Ingresar con mi cuenta de Google/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Crear cuaderno y abrir portada/i }));
+
+    // 1. Registrar primera entrada de Hornero común
+    fireEvent.click(await screen.findByRole('button', { name: /Registrar mi primer hallazgo/i }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Hornero en el pasto \(Foto nítida \+ EXIF GPS\)/i })
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Confirmar foto e identificar especie/i }));
+    const confirmHorneroBtn = await screen.findByRole(
+      'button',
+      { name: /Confirmar Hornero común e incorporar al cuaderno/i },
+      { timeout: 3000 }
+    );
+    fireEvent.click(confirmHorneroBtn);
+
+    // 2. Verificar que la hoja muestra el reproductor bioacústico y el registro en el tiempo
+    expect(
+      await screen.findByRole('button', { name: /Escuchar sonido de Hornero común/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Registro en el tiempo de Hornero común \(1\)/i)).toBeInTheDocument();
+
+    // 3. Sumar una 2.ª fotografía de la MISMA especie con su propia ubicación y nota -> IA verifica coincidencia
+    fireEvent.click(screen.getByRole('button', { name: /Sumar foto o video a esta hoja/i }));
+    const addDialog = await screen.findByRole('dialog', {
+      name: /Sumar nueva entrada a la hoja de Hornero común/i,
+    });
+    expect(addDialog).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Hornero en el pasto/i }));
+    fireEvent.change(screen.getByLabelText(/Ubicación aproximada \(privada\)/i), {
+      target: { value: 'Jardín del frente' },
+    });
+    fireEvent.change(screen.getByLabelText(/Nota personal de esta entrada/i), {
+      target: { value: 'Volvió a juntar barro húmedo' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Verificar especie y sumar entrada/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Registro en el tiempo de Hornero común \(2\)/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Jardín del frente/i)).toBeInTheDocument();
+    expect(screen.getByText(/Volvió a juntar barro húmedo/i)).toBeInTheDocument();
+    expect(screen.getByText(/IA verificada/i)).toBeInTheDocument();
+
+    // 4. Intentar sumar por error una foto de OTRA especie (Benteveo común) en la hoja del Hornero -> IA bloquea y ofrece llevarla a su hoja
+    fireEvent.click(screen.getByRole('button', { name: /Sumar foto o video a esta hoja/i }));
+    await screen.findByRole('dialog', { name: /Sumar nueva entrada a la hoja de Hornero común/i });
+    fireEvent.click(screen.getByRole('button', { name: /Benteveo común al sol/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Verificar especie y sumar entrada/i }));
+
+    expect(await screen.findByText(/Parece ser otra especie diferente/i)).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: /Guardar en su propia hoja \(Benteveo común\)/i })
+    );
+
+    // Ahora estamos en la hoja independiente de Benteveo común (sin mezclar con Hornero)
+    expect(
+      await screen.findByRole('button', { name: /Escuchar sonido de Benteveo común/i })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Registro en el tiempo de Benteveo común \(1\)/i)).toBeInTheDocument();
+
+    // 5. Sumar un VIDEO CORTO a la hoja de Benteveo común (sin revisión de especie por IA)
+    fireEvent.click(screen.getByRole('button', { name: /Sumar foto o video a esta hoja/i }));
+    await screen.findByRole('dialog', { name: /Sumar nueva entrada a la hoja de Benteveo común/i });
+    fireEvent.click(screen.getByRole('tab', { name: /Video corto/i }));
+
+    const fileInputs = document.querySelectorAll('input[type="file"][accept*="video"]');
+    const videoInput = fileInputs[0] as HTMLInputElement;
+    const shortMp4 = new File([new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112])], 'benteveo_rama.mp4', {
+      type: 'video/mp4',
+    });
+    fireEvent.change(videoInput, { target: { files: [shortMp4] } });
+
+    const noteArea = await screen.findByLabelText(/Nota personal de esta entrada/i);
+    fireEvent.change(noteArea, { target: { value: 'Cantando fuerte en el fresno' } });
+    fireEvent.click(screen.getByRole('button', { name: /Sumar video a esta hoja/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Registro en el tiempo de Benteveo común \(2\)/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Cantando fuerte en el fresno/i)).toBeInTheDocument();
   });
 });

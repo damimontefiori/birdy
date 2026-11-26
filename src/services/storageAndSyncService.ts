@@ -80,6 +80,92 @@ function openPhotoDatabase(): Promise<IDBDatabase | null> {
 }
 
 const memoryPhotoFallback = new Map<string, string>();
+const memoryVideoBlobFallback = new Map<string, Blob>();
+const memoryVideoObjectUrlCache = new Map<string, string>();
+
+export async function saveVideoBlobToIndexedDb(
+  videoStorageKey: string,
+  videoBlob: Blob,
+  mimeType: string
+): Promise<void> {
+  memoryVideoBlobFallback.set(videoStorageKey, videoBlob);
+  const db = await openPhotoDatabase();
+  if (!db) return;
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(PHOTO_STORE, 'readwrite');
+      const store = tx.objectStore(PHOTO_STORE);
+      store.put({
+        key: videoStorageKey,
+        videoBlob,
+        mimeType,
+        savedAt: new Date().toISOString(),
+      });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export async function loadVideoBlobFromIndexedDb(videoStorageKey: string): Promise<Blob | null> {
+  if (memoryVideoBlobFallback.has(videoStorageKey)) {
+    return memoryVideoBlobFallback.get(videoStorageKey)!;
+  }
+  const db = await openPhotoDatabase();
+  if (!db) return null;
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(PHOTO_STORE, 'readonly');
+      const store = tx.objectStore(PHOTO_STORE);
+      const req = store.get(videoStorageKey);
+      req.onsuccess = () => {
+        const result = req.result;
+        if (result?.videoBlob instanceof Blob) {
+          memoryVideoBlobFallback.set(videoStorageKey, result.videoBlob);
+          resolve(result.videoBlob);
+        } else {
+          resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function uploadShortVideoToRemoteR2(params: {
+  uid: string;
+  sightingId: string;
+  videoBlob: Blob;
+}): Promise<string | null> {
+  if (isTestEnvironment()) return null;
+  try {
+    const qs = new URLSearchParams({
+      uid: params.uid,
+      sightingId: params.sightingId,
+    });
+    const res = await fetch(`${getApiBase()}/api/cloud/upload-media?${qs.toString()}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': params.videoBlob.type || 'video/mp4',
+        'X-Sighting-Id': params.sightingId,
+        'X-Media-Kind': 'video',
+      },
+      body: params.videoBlob,
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { uploaded?: boolean; url?: string };
+    return data.uploaded && data.url ? data.url : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function savePhotoBinaryToIndexedDb(
   photoStorageKey: string,
@@ -138,6 +224,8 @@ export async function loadPhotoBinaryFromIndexedDb(photoStorageKey: string): Pro
 
 export async function clearLocalDeviceIndexedDb(): Promise<void> {
   memoryPhotoFallback.clear();
+  memoryVideoBlobFallback.clear();
+  memoryVideoObjectUrlCache.clear();
   const db = await openPhotoDatabase();
   if (!db) return;
 
@@ -204,7 +292,16 @@ export function saveLocalDeviceState(state: AppPersistedState): void {
       [...(state.customSpecies || []), ...getCustomSpeciesList()].map((sp) => [sp.taxonId, sp])
     ).values()
   );
-  const fullPayload = { ...state, customSpecies: mergedCustom };
+  const fullPayload: AppPersistedState = {
+    ...state,
+    // Nunca persistir blob: temporales ni videos base64 en localStorage (viven en IndexedDB o R2)
+    sightings: state.sightings.map((s) =>
+      s.videoUrl && (s.videoUrl.startsWith('blob:') || s.videoUrl.startsWith('data:video/'))
+        ? { ...s, videoUrl: undefined }
+        : s
+    ),
+    customSpecies: mergedCustom,
+  };
 
   try {
     localStorage.setItem(LOCAL_DEVICE_STATE_KEY, JSON.stringify(fullPayload));
@@ -236,13 +333,35 @@ export async function rehydrateSightingPhotosFromIndexedDb(
   let changed = false;
   const hydrated = await Promise.all(
     sightings.map(async (s) => {
-      if (s.sanitizedPhotoDataUrl || !s.photoStorageKey) return s;
-      const fromIdb = await loadPhotoBinaryFromIndexedDb(s.photoStorageKey);
-      if (fromIdb) {
-        changed = true;
-        return { ...s, sanitizedPhotoDataUrl: fromIdb };
+      let next = s;
+      if (!next.sanitizedPhotoDataUrl && next.photoStorageKey) {
+        const fromIdb = await loadPhotoBinaryFromIndexedDb(next.photoStorageKey);
+        if (fromIdb) {
+          changed = true;
+          next = { ...next, sanitizedPhotoDataUrl: fromIdb };
+        }
       }
-      return s;
+      if (
+        next.mediaType === 'video' &&
+        next.videoStorageKey &&
+        (!next.videoUrl || next.videoUrl.startsWith('blob:'))
+      ) {
+        let objUrl = memoryVideoObjectUrlCache.get(next.videoStorageKey);
+        if (!objUrl) {
+          const blob = await loadVideoBlobFromIndexedDb(next.videoStorageKey);
+          if (blob && typeof URL.createObjectURL === 'function' && !isTestEnvironment()) {
+            objUrl = URL.createObjectURL(blob);
+            memoryVideoObjectUrlCache.set(next.videoStorageKey, objUrl);
+          } else if (blob && isTestEnvironment()) {
+            objUrl = `data:${blob.type || 'video/mp4'};base64,VIDEO_PREVIEW`;
+          }
+        }
+        if (objUrl && objUrl !== next.videoUrl) {
+          changed = true;
+          next = { ...next, videoUrl: objUrl };
+        }
+      }
+      return next;
     })
   );
   return changed ? hydrated : sightings;
@@ -329,6 +448,7 @@ export interface RealCloudSyncResult {
   errorMessage?: string;
   remoteSynced?: boolean;
   sightingPhotoUrls?: Record<string, string>;
+  sightingVideoUrls?: Record<string, string>;
   illustrationUrls?: Record<string, string>;
 }
 
@@ -353,7 +473,11 @@ export async function syncFullStateToRemoteCloud(params: {
   }
 
   try {
-    const hydratedSightings = await rehydrateSightingPhotosFromIndexedDb(params.state.sightings);
+    const hydratedSightingsRaw = await rehydrateSightingPhotosFromIndexedDb(params.state.sightings);
+    // Nunca enviar URLs efímeras blob: al servidor Firestore
+    const hydratedSightings = hydratedSightingsRaw.map((s) =>
+      s.videoUrl && s.videoUrl.startsWith('blob:') ? { ...s, videoUrl: undefined } : s
+    );
     const mergedCustom = Array.from(
       new Map(
         [...(params.state.customSpecies || []), ...getCustomSpeciesList()].map((sp) => [
@@ -507,16 +631,41 @@ export async function syncSightingAndNotebookToCloud(params: {
   // 2. Intentar sincronización real con Firestore + Cloudflare R2 en el servidor
   let remoteSynced = false;
   let sightingPhotoUrls: Record<string, string> | undefined;
+  let sightingVideoUrls: Record<string, string> | undefined;
   let illustrationUrls: Record<string, string> | undefined;
+  let resolvedRemoteVideoUrl: string | undefined =
+    sighting.videoUrl && !sighting.videoUrl.startsWith('blob:') && !sighting.videoUrl.startsWith('data:')
+      ? sighting.videoUrl
+      : undefined;
 
   if (!isTestEnvironment()) {
+    // Si la entrada es un video corto aún local, subir el binario a Cloudflare R2 antes de sincronizar Firestore
+    if (sighting.mediaType === 'video' && !resolvedRemoteVideoUrl && sighting.videoStorageKey) {
+      const videoBlob = await loadVideoBlobFromIndexedDb(sighting.videoStorageKey);
+      if (videoBlob) {
+        const uploadedVideoUrl = await uploadShortVideoToRemoteR2({
+          uid,
+          sightingId: sighting.id,
+          videoBlob,
+        });
+        if (uploadedVideoUrl) {
+          resolvedRemoteVideoUrl = uploadedVideoUrl;
+          sightingVideoUrls = { [sighting.id]: uploadedVideoUrl };
+        }
+      }
+    }
+
+    const sightingForSync: Sighting = {
+      ...sighting,
+      sanitizedPhotoDataUrl: binaryData,
+      videoUrl: resolvedRemoteVideoUrl || undefined,
+    };
+
     const stateWithSighting: AppPersistedState = {
       ...state,
       sightings: state.sightings.some((s) => s.id === sighting.id)
-        ? state.sightings.map((s) =>
-            s.id === sighting.id ? { ...sighting, sanitizedPhotoDataUrl: binaryData } : s
-          )
-        : [...state.sightings, { ...sighting, sanitizedPhotoDataUrl: binaryData }],
+        ? state.sightings.map((s) => (s.id === sighting.id ? sightingForSync : s))
+        : [...state.sightings, sightingForSync],
     };
 
     const remote = await syncFullStateToRemoteCloud({
@@ -559,6 +708,7 @@ export async function syncSightingAndNotebookToCloud(params: {
   const updatedSighting: Sighting = {
     ...sighting,
     sanitizedPhotoDataUrl: finalPhotoRef,
+    videoUrl: resolvedRemoteVideoUrl || sighting.videoUrl,
     syncStatus: 'respaldado',
     lastSyncError: undefined,
     updatedAt: new Date().toISOString(),
@@ -608,6 +758,7 @@ export async function syncSightingAndNotebookToCloud(params: {
     finalSyncStatus: 'respaldado',
     remoteSynced,
     sightingPhotoUrls,
+    sightingVideoUrls,
     illustrationUrls,
   };
 }
@@ -928,4 +1079,37 @@ export function formatShortArgentineDate(isoOrDateStr: string): string {
   } catch {
     return isoOrDateStr;
   }
+}
+
+export function formatArgentineDateTime(isoOrDateStr: string): string {
+  try {
+    const d = new Date(isoOrDateStr);
+    if (isNaN(d.getTime())) return isoOrDateStr;
+    const datePart = d.toLocaleDateString('es-AR', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+    if (!isoOrDateStr.includes('T')) return datePart;
+    const timePart = d.toLocaleTimeString('es-AR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    return `${datePart} · ${timePart} h`;
+  } catch {
+    return isoOrDateStr;
+  }
+}
+
+export function computeEarliestObservedAt(
+  sightings: Array<{ observedAt: string }>,
+  fallbackIso: string
+): string {
+  if (sightings.length === 0) return fallbackIso;
+  const sorted = [...sightings]
+    .map((s) => s.observedAt)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  return sorted[0] || fallbackIso;
 }

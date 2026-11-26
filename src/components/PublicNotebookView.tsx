@@ -26,6 +26,7 @@ import {
   PublicSanitizedSheet,
 } from '../types/domain';
 import { ImageLightbox, LightboxItem } from './ImageLightbox';
+import { SpeciesSoundPlayer } from './SpeciesSoundPlayer';
 
 interface PublicNotebookViewProps {
   shareToken: string;
@@ -260,6 +261,14 @@ export const PublicNotebookView: React.FC<PublicNotebookViewProps> = ({
                 {selectedSheet.sightingsCount === 1 ? 'avistamiento' : 'avistamientos'}
               </span>
             </div>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <SpeciesSoundPlayer
+              scientificName={selectedSheet.scientificName}
+              commonNameAr={selectedSheet.commonNameAr}
+              organismGroup={selectedSheet.organismGroup}
+            />
           </div>
 
           {/* Protagonistas visuales: Lámina + Fotos compartidas (ampliables) */}

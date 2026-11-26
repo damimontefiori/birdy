@@ -3,6 +3,8 @@ import { ChevronLeft, ChevronRight, RotateCcw, X, ZoomIn, ZoomOut } from 'lucide
 
 export interface LightboxItem {
   url: string;
+  mediaType?: 'photo' | 'video';
+  videoUrl?: string;
   title?: string;
   subtitle?: string;
   badge?: string;
@@ -29,6 +31,7 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
   const lastTapRef = useRef<number>(0);
 
   const current = items[index];
+  const isCurrentVideo = current?.mediaType === 'video' && Boolean(current?.videoUrl);
 
   useEffect(() => {
     setZoom(1);
@@ -165,37 +168,41 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
         </div>
 
         <div className="lightbox-controls">
-          <button
-            type="button"
-            className="lightbox-icon-btn"
-            onClick={handleZoomOut}
-            disabled={zoom <= 1}
-            aria-label="Alejar"
-            title="Alejar"
-          >
-            <ZoomOut size={19} />
-          </button>
-          <span className="lightbox-zoom-label">{Math.round(zoom * 100)}%</span>
-          <button
-            type="button"
-            className="lightbox-icon-btn"
-            onClick={handleZoomIn}
-            disabled={zoom >= 3.5}
-            aria-label="Acercar"
-            title="Acercar"
-          >
-            <ZoomIn size={19} />
-          </button>
-          {zoom > 1 && (
-            <button
-              type="button"
-              className="lightbox-icon-btn"
-              onClick={handleResetZoom}
-              aria-label="Restablecer zoom"
-              title="Restablecer zoom"
-            >
-              <RotateCcw size={17} />
-            </button>
+          {!isCurrentVideo && (
+            <>
+              <button
+                type="button"
+                className="lightbox-icon-btn"
+                onClick={handleZoomOut}
+                disabled={zoom <= 1}
+                aria-label="Alejar"
+                title="Alejar"
+              >
+                <ZoomOut size={19} />
+              </button>
+              <span className="lightbox-zoom-label">{Math.round(zoom * 100)}%</span>
+              <button
+                type="button"
+                className="lightbox-icon-btn"
+                onClick={handleZoomIn}
+                disabled={zoom >= 3.5}
+                aria-label="Acercar"
+                title="Acercar"
+              >
+                <ZoomIn size={19} />
+              </button>
+              {zoom > 1 && (
+                <button
+                  type="button"
+                  className="lightbox-icon-btn"
+                  onClick={handleResetZoom}
+                  aria-label="Restablecer zoom"
+                  title="Restablecer zoom"
+                >
+                  <RotateCcw size={17} />
+                </button>
+              )}
+            </>
           )}
           <button
             type="button"
@@ -212,11 +219,11 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
       {/* Lienzo interactivo de imagen */}
       <div
         className="lightbox-stage"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        style={{ cursor: zoom > 1 ? 'grab' : 'zoom-in' }}
+        onPointerDown={isCurrentVideo ? undefined : handlePointerDown}
+        onPointerMove={isCurrentVideo ? undefined : handlePointerMove}
+        onPointerUp={isCurrentVideo ? undefined : handlePointerUp}
+        onPointerCancel={isCurrentVideo ? undefined : handlePointerUp}
+        style={{ cursor: isCurrentVideo ? 'default' : zoom > 1 ? 'grab' : 'zoom-in' }}
       >
         {items.length > 1 && (
           <button
@@ -232,15 +239,28 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
           </button>
         )}
 
-        <img
-          src={current.url}
-          alt={current.title || 'Fotografía ampliada'}
-          className="lightbox-image"
-          draggable={false}
-          style={{
-            transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${zoom})`,
-          }}
-        />
+        {isCurrentVideo ? (
+          <video
+            key={current.videoUrl}
+            src={current.videoUrl}
+            poster={current.url}
+            controls
+            autoPlay
+            playsInline
+            className="lightbox-video"
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <img
+            src={current.url}
+            alt={current.title || 'Fotografía ampliada'}
+            className="lightbox-image"
+            draggable={false}
+            style={{
+              transform: `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${zoom})`,
+            }}
+          />
+        )}
 
         {items.length > 1 && (
           <button
@@ -262,7 +282,9 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
         {current.title && <div className="lightbox-title">{current.title}</div>}
         {current.subtitle && <div className="lightbox-subtitle">{current.subtitle}</div>}
         <div className="lightbox-hint">
-          Tocá dos veces para acercar · Arrastrá para explorar detalles
+          {isCurrentVideo
+            ? 'Video corto de tu bitácora de campo'
+            : 'Tocá dos veces para acercar · Arrastrá para explorar detalles'}
         </div>
       </div>
     </div>

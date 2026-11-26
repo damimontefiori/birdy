@@ -16,6 +16,7 @@ import {
   ORGANISM_GROUP_META,
   SpeciesCatalogEntry,
 } from '../types/domain';
+import { autoFrameBotanicalPlateDataUrl } from './plateAutoFramer';
 import {
   fetchReferencePhotosForSpecies,
 } from './speciesReferenceService';
@@ -61,6 +62,7 @@ export interface BackendAiHealth {
   provider: string;
   visionModel?: string;
   imageModel?: string;
+  soundAiFallbackConfigured?: boolean;
   cloudStorage?: {
     firestoreConfigured: boolean;
     r2BucketConfigured: boolean;
@@ -813,7 +815,10 @@ export async function generateOrReuseIllustration(params: {
           variationNote?: string;
         };
         if (gen.imageUrl) {
-          finalImageUrl = gen.imageUrl;
+          finalImageUrl =
+            style === 'acuarela_naturalista' || style === 'lapiz_grafito'
+              ? await autoFrameBotanicalPlateDataUrl(gen.imageUrl, 1024)
+              : gen.imageUrl;
           modelProvider = gen.modelProvider || 'IA Naturalista Bioma';
           variationNote = gen.variationNote || variationNote;
           cachedIllustrationCloudConfigured = true;
@@ -893,6 +898,113 @@ export async function generateOrReuseIllustration(params: {
     illustration: newIllustration,
     reused: false,
     aiError: isPendingAi ? aiPendingReason : undefined,
+  };
+}
+
+export interface SpeciesVerificationResult {
+  status: 'match' | 'mismatch' | 'inconclusive';
+  explanation: string;
+  detectedCandidate?: AICandidate;
+  rawResponse: IdentificationResponse;
+}
+
+function normalizeSci(sci: string): string {
+  return sci
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .slice(0, 2)
+    .join(' ');
+}
+
+/**
+ * Verifica mediante visión IA que una nueva fotografía agregada a una hoja existente
+ * corresponda efectivamente a la misma especie de esa hoja, previniendo errores de registro.
+ */
+export async function verifyPhotoMatchesSheetSpecies(params: {
+  photoSha256: string;
+  fileName: string;
+  sanitizedPhotoDataUrl: string;
+  expectedSpecies: SpeciesCatalogEntry;
+  generalLocationHint?: string;
+  observedAtIso?: string;
+  presetScenario?: IdentificationRequest['presetScenario'];
+}): Promise<SpeciesVerificationResult> {
+  const response = await identifyBirdFromPhoto({
+    photoSha256: params.photoSha256,
+    fileName: params.fileName,
+    sanitizedPhotoDataUrl: params.sanitizedPhotoDataUrl,
+    generalLocationHint: params.generalLocationHint,
+    observedAtIso: params.observedAtIso,
+    presetScenario: params.presetScenario || 'auto',
+  });
+
+  if (
+    response.aiMode === 'unconfigured' ||
+    response.aiMode === 'error' ||
+    response.confidenceLevel === 'insuficiente' ||
+    response.candidates.length === 0
+  ) {
+    return {
+      status: 'inconclusive',
+      explanation:
+        response.aiMode === 'unconfigured'
+          ? 'No hay motor de visión configurado en este entorno para verificar automáticamente la especie.'
+          : response.uncertaintyReason || response.explanation,
+      rawResponse: response,
+    };
+  }
+
+  const expectedTaxon = params.expectedSpecies.taxonId;
+  const expectedSci = normalizeSci(params.expectedSpecies.scientificName);
+  const expectedGenus = expectedSci.split(' ')[0] || '';
+
+  const topCandidate = response.candidates[0];
+  const topSci = normalizeSci(topCandidate.scientificName);
+
+  // 1. Coincidencia directa en la candidata principal o propuesta
+  if (response.proposedTaxonId === expectedTaxon || topCandidate.taxonId === expectedTaxon || topSci === expectedSci) {
+    return {
+      status: 'match',
+      explanation: `Verificado: los rasgos coinciden con ${params.expectedSpecies.commonNameAr} (${params.expectedSpecies.scientificName}).`,
+      detectedCandidate: topCandidate,
+      rawResponse: response,
+    };
+  }
+
+  // 2. La especie de la hoja figura entre las candidatas plausibles (ej. hembra/juvenil o ángulo lateral con luz difícil)
+  const matchingPlausible = response.candidates.find(
+    (c) =>
+      (c.taxonId === expectedTaxon || normalizeSci(c.scientificName) === expectedSci) &&
+      (c.confidenceBand === 'Muy probable' || c.confidenceBand === 'Posible candidata')
+  );
+  if (matchingPlausible) {
+    return {
+      status: 'match',
+      explanation: `Verificado como compatible con ${params.expectedSpecies.commonNameAr} (${matchingPlausible.reasoning}).`,
+      detectedCandidate: matchingPlausible,
+      rawResponse: response,
+    };
+  }
+
+  // 3. Mismo género con confianza media (ej. subespecies o especies crípticas de insectos/abejorros)
+  const topGenus = topSci.split(' ')[0] || '';
+  if (response.confidenceLevel === 'media' && expectedGenus.length >= 4 && topGenus === expectedGenus) {
+    return {
+      status: 'match',
+      explanation: `Compatible con el género ${params.expectedSpecies.scientificName.split(' ')[0]} (${response.explanation}).`,
+      detectedCandidate: topCandidate,
+      rawResponse: response,
+    };
+  }
+
+  // 4. Discrepancia clara: la IA detectó otra especie distinta
+  return {
+    status: 'mismatch',
+    explanation: response.explanation,
+    detectedCandidate: topCandidate,
+    rawResponse: response,
   };
 }
 

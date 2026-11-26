@@ -1994,3 +1994,495 @@ select,
   border: 1px solid #E6CE9A;
   border-left: 4px solid var(--amber-gold);
 }
+
+/* ============================================================================
+   Editor táctil de recorte y zoom al registrar un hallazgo
+   ============================================================================ */
+.draft-photo-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.crop-modal-sheet {
+  max-width: 520px;
+}
+
+.crop-stage-outer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  border-radius: 14px;
+  background: #1B1815;
+  margin-bottom: 12px;
+  min-height: 240px;
+  max-height: 360px;
+}
+
+.crop-stage-frame {
+  position: relative;
+  width: 100%;
+  max-width: 320px;
+  max-height: 330px;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 2px solid rgba(255, 253, 248, 0.85);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 10px 26px rgba(0, 0, 0, 0.42);
+  background: #12100E;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.crop-stage-frame:active {
+  cursor: grabbing;
+}
+
+.crop-stage-img {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  max-width: none;
+  max-height: none;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  will-change: transform;
+}
+
+.crop-grid-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.crop-grid-v,
+.crop-grid-h {
+  position: absolute;
+  background: rgba(255, 253, 248, 0.34);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.38);
+}
+
+.crop-grid-v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.crop-grid-v.v1 {
+  left: 33.333%;
+}
+
+.crop-grid-v.v2 {
+  left: 66.666%;
+}
+
+.crop-grid-h {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.crop-grid-h.h1 {
+  top: 33.333%;
+}
+
+.crop-grid-h.h2 {
+  top: 66.666%;
+}
+
+.crop-controls-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--paper-inset);
+  border: 1px solid var(--paper-edge);
+}
+
+.crop-zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.crop-zoom-slider {
+  flex: 1;
+  accent-color: var(--botanical-green);
+  height: 6px;
+  cursor: pointer;
+}
+
+.crop-zoom-readout {
+  min-width: 44px;
+  text-align: right;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--botanical-green-dark);
+}
+
+.crop-tools-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ============================================================================
+   Reproductor bioacústico de la especie (Aves, Polinizadores e Insectos)
+   ============================================================================ */
+.sound-player-card {
+  padding: 10px 12px;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #F5F8F4 0%, #FAF6EC 100%);
+  border: 1px solid rgba(56, 87, 62, 0.24);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.sound-player-card.playing {
+  border-color: var(--botanical-green);
+  box-shadow: 0 4px 14px rgba(56, 87, 62, 0.12);
+}
+
+.sound-player-card.silent {
+  background: var(--paper-inset);
+  border-color: var(--paper-edge);
+}
+
+.sound-player-card.compact {
+  padding: 8px 10px;
+}
+
+.sound-player-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.sound-play-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  border: none;
+  background: var(--botanical-green);
+  color: #FFFDF8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  box-shadow: 0 3px 8px rgba(42, 74, 48, 0.24);
+  transition: transform 120ms ease, background-color 140ms ease;
+}
+
+.sound-play-btn:hover {
+  background: var(--botanical-green-dark);
+}
+
+.sound-play-btn.active {
+  background: #1F5A54;
+}
+
+.sound-play-btn.loading {
+  background: var(--botanical-sage-soft);
+  color: var(--botanical-green);
+  box-shadow: none;
+  cursor: default;
+}
+
+.sound-silent-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: rgba(110, 99, 82, 0.12);
+  color: var(--ink-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sound-meta-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sound-head-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sound-title-text {
+  font-size: 0.87rem;
+  font-weight: 700;
+  color: var(--ink-primary);
+  line-height: 1.25;
+}
+
+.sound-sub-text {
+  font-size: 0.79rem;
+  color: var(--ink-secondary);
+  line-height: 1.34;
+}
+
+.sound-origin-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.sound-origin-badge.real {
+  background: #E5EFE7;
+  color: #26492D;
+}
+
+.sound-origin-badge.ai {
+  background: #F6EBDD;
+  color: #7D4B16;
+}
+
+.sound-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sound-progress-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(56, 87, 62, 0.15);
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.sound-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--botanical-green);
+  transition: width 100ms linear;
+}
+
+.sound-wave-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+
+.sound-wave-bars span {
+  width: 3px;
+  height: 5px;
+  border-radius: 2px;
+  background: var(--botanical-green);
+  opacity: 0.45;
+}
+
+.sound-wave-bars span.anim {
+  opacity: 0.95;
+  animation: biomaSoundPulse 0.85s ease-in-out infinite alternate;
+}
+
+.sound-wave-bars span.anim.b2 {
+  animation-delay: 0.18s;
+}
+
+.sound-wave-bars span.anim.b3 {
+  animation-delay: 0.34s;
+}
+
+.sound-wave-bars span.anim.b4 {
+  animation-delay: 0.5s;
+}
+
+@keyframes biomaSoundPulse {
+  0% {
+    height: 4px;
+  }
+  100% {
+    height: 14px;
+  }
+}
+
+.sound-time-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.sound-credit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.sound-alt-takes {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.sound-take-chip {
+  border: 1px solid var(--paper-edge);
+  background: #FFFDF8;
+  color: var(--ink-secondary);
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 0.69rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sound-take-chip.active {
+  background: var(--botanical-green);
+  border-color: var(--botanical-green);
+  color: #FFFDF8;
+}
+
+.sound-error-msg {
+  font-size: 0.75rem;
+  color: #8E3B24;
+}
+
+/* ============================================================================
+   Registro en el tiempo (Entradas con Foto verificada / Video corto)
+   ============================================================================ */
+.entry-modal-sheet {
+  max-width: 540px;
+}
+
+.entry-video-preview-wrap {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #141210;
+  max-height: 280px;
+  display: flex;
+  justify-content: center;
+}
+
+.entry-video-preview {
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  display: block;
+}
+
+.video-duration-pill {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(18, 16, 14, 0.76);
+  color: #FFFDF8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.lightbox-video {
+  max-width: 100%;
+  max-height: 78vh;
+  border-radius: 10px;
+  background: #000;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+}
+
+.hero-video-stage {
+  border-radius: 14px;
+  overflow: hidden;
+  background: #151311;
+  border: 1.5px solid var(--paper-edge);
+}
+
+.hero-inline-video {
+  width: 100%;
+  max-height: 420px;
+  display: block;
+  object-fit: contain;
+}
+
+.sheet-entry-cta-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.entry-selector-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.entry-selector-pills::-webkit-scrollbar {
+  display: none;
+}
+
+.entry-pill-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-edge);
+  background: #FFFDF8;
+  color: var(--ink-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.entry-pill-btn.active {
+  background: var(--botanical-green);
+  border-color: var(--botanical-green);
+  color: #FFFDF8;
+}
+
+.sighting-video-badge {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(18, 16, 14, 0.82);
+  color: #FFFDF8;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.sighting-active-highlight {
+  border-color: var(--botanical-green) !important;
+  box-shadow: 0 0 0 1px rgba(56, 87, 62, 0.22);
+}

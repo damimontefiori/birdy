@@ -274,6 +274,14 @@ export interface PrivateLocation {
   acceptedByUser: boolean;
 }
 
+export type SightingMediaType = 'photo' | 'video';
+
+export type SpeciesVerificationMode =
+  | 'initial_identification'
+  | 'ai_verified_match'
+  | 'manual_override'
+  | 'video_unverified';
+
 export interface Sighting {
   id: string; // clientSightingId (UUID v4) para idempotencia
   notebookId: string;
@@ -286,15 +294,21 @@ export interface Sighting {
   aiExplanation: string | null;
   aiUncertaintyReason: string | null;
   confirmedByUser: boolean;
-  photoStorageKey: string; // Clave en IndexedDB / Cloud Storage
-  sanitizedPhotoDataUrl: string; // Imagen re-codificada sin cabeceras EXIF/GPS
+  mediaType?: SightingMediaType; // 'photo' (por defecto) o 'video' corto tomado con celular
+  photoStorageKey: string; // Clave en IndexedDB / Cloud Storage (foto o miniatura/póster del video)
+  sanitizedPhotoDataUrl: string; // Imagen re-codificada sin cabeceras EXIF/GPS (o póster del video)
   photoSha256: string;
-  observedAt: string; // Fecha/hora de observación (editable, puede venir de EXIF)
+  videoStorageKey?: string; // Clave local en IndexedDB para el binario del video corto
+  videoUrl?: string; // URL en Cloudflare R2 (/api/media/...) o ObjectURL local hidratada
+  videoDurationSec?: number;
+  videoMimeType?: string;
+  speciesVerificationMode?: SpeciesVerificationMode;
+  observedAt: string; // Fecha/hora propia de ESTA entrada en el tiempo (editable, puede venir de EXIF)
   createdAt: string;
   updatedAt: string;
   exifSuggestions?: ExifSuggestions;
-  privateLocation: PrivateLocation | null; // Jamás expuesta en vistas públicas ni piezas para redes
-  personalNote: string;
+  privateLocation: PrivateLocation | null; // Ubicación propia de ESTA entrada (jamás expuesta públicamente)
+  personalNote: string; // Nota personal propia de ESTA entrada
   retryCount: number;
   lastSyncError?: string;
 }

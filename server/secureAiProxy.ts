@@ -87,6 +87,8 @@ export interface ServerEnv {
   CLOUDFLARE_R2_SECRET_ACCESS_KEY?: string;
   CLOUDFLARE_R2_BUCKET_NAME?: string;
   CLOUDFLARE_R2_PUBLIC_URL?: string;
+  ELEVEN_LABS_API_KEY?: string;
+  ELEVENLABS_API_KEY?: string;
 }
 
 export interface ReferencePhotoDTO {
@@ -444,9 +446,9 @@ export function buildNaturalistIllustrationPrompt(params: {
   let taxonContext = 'bird of South America';
   let poseHint = altVersion
     ? evenVersion
-      ? 'Perched in a lively three-quarter profile facing left on a slender diagonal twig with small olive-green botanical leaves and tiny pale buds.'
-      : 'Perched in a graceful alert side profile with head turned slightly on a delicate native branch with sparse fine leaves.'
-    : 'Perched naturally in clean side profile on a slender diagonal botanical twig with delicate small olive-green leaves and tiny pale buds.';
+      ? 'Large close-up portrait perched in a lively three-quarter profile facing left on an arching diagonal botanical branch adorned with expressive olive-green leaves and pale buds.'
+      : 'Large close-up portrait in a graceful alert side profile with head turned slightly on a curved native botanical bough with rich fine leaves and blossoms.'
+    : 'Large close-up portrait perched naturally in clean side profile on a sweeping diagonal botanical branch with graceful olive-green leaves and delicate native buds.';
   let detailPhrase = 'crisp layered feather brushwork';
 
   if (group === 'mariposas') {
@@ -454,36 +456,36 @@ export function buildNaturalistIllustrationPrompt(params: {
     taxonContext = 'butterfly / moth of South America';
     poseHint = altVersion
       ? evenVersion
-        ? 'Perched delicately with wings gently open on a slender South American wildflower stem with small leaves.'
-        : 'Graceful natural side-angle view resting on a botanical flower blossom showing intricate wing patterns.'
-      : 'Wings gracefully spread in a classic naturalist study perched lightly on a delicate native wildflower sprig with small olive leaves.';
+        ? 'Large close-up naturalist study perched delicately with wings gracefully open across a tall arching South American wildflower stem with blooming clusters and lush leaves.'
+        : 'Large close-up natural side-angle view resting on a prominent native botanical flower cluster with curved foliage showing intricate wing patterns.'
+      : 'Large close-up study with wings generously spread across a graceful arching native wildflower sprig and lush olive leaves.';
     detailPhrase = 'luminous translucent wing-scale brushwork and delicate vein linework';
   } else if (group === 'abejas_abejorros') {
     discipline = 'entomological botanical field-guide';
     taxonContext = 'pollinator bee / bumblebee of South America';
     poseHint = altVersion
       ? evenVersion
-        ? 'Close-up naturalist study gathering nectar on a delicate native garden blossom with fine pollen details.'
-        : 'Three-quarter profile perched gently on a small blooming botanical sprig showing translucent veined wings.'
-      : 'Naturalist close-up study perched delicately on a single native wildflower blossom with sparse green leaves, showing velvety hairs and gossamer wings.';
+        ? 'Heroic macro close-up naturalist study gathering nectar on a large lush native garden blossom with arching stem, leaves, and fine pollen details.'
+        : 'Large close-up three-quarter profile perched gently on a sweeping blooming botanical sprig showing translucent veined wings and velvety thorax.'
+      : 'Large macro close-up naturalist study perched prominently on an arching native wildflower blossom and leafy stem, showing velvety hairs and gossamer wings.';
     detailPhrase = 'fine velvety hair texture, delicate translucent veined wings, and crisp sepia ink linework';
   } else if (group === 'insectos_aracnidos') {
     discipline = 'entomological botanical cabinet';
     taxonContext = 'garden insect / arachnid of South America';
     poseHint = altVersion
       ? evenVersion
-        ? 'Detailed naturalist three-quarter study resting calmly on a slender garden leaf and stem.'
-        : 'Clean dorsal-oblique naturalist study perched on a delicate botanical twig with two small leaves.'
-      : 'Classic scientific naturalist study resting calmly on a single delicate green garden leaf and slender botanical stem.';
+        ? 'Large macro close-up naturalist three-quarter study resting prominently on a sweeping curved garden leaf, arching stem, and delicate buds.'
+        : 'Large macro close-up dorsal-oblique naturalist study perched on a graceful arching botanical twig with lush leaves.'
+      : 'Large macro close-up scientific naturalist study resting prominently on a broad curved green garden leaf and arching botanical stem.';
     detailPhrase = 'fine anatomical ink precision, translucent washes, and subtle natural sheen';
   } else if (group === 'fauna_vecina') {
     discipline = 'zoological naturalist field-guide';
     taxonContext = 'garden wildlife animal of South America';
     poseHint = altVersion
       ? evenVersion
-        ? 'Alert three-quarter natural profile resting gently on a small mossy garden stone with two tiny fern leaves.'
-        : 'Calm side-profile naturalist study nestled beside a delicate leafy garden twig.'
-      : 'Calm natural side-profile study resting on a small mossy stone or delicate leafy garden twig.';
+        ? 'Large close-up three-quarter natural portrait resting prominently on a textured mossy garden stone framed by graceful arching native fern fronds and delicate foliage.'
+        : 'Large close-up side-profile naturalist portrait nestled on mossy bark with arching native fern fronds and leafy botanical sprigs rising gracefully around it.'
+      : 'Large close-up natural portrait resting prominently on a textured mossy garden stone framed by arching native fern fronds and leafy garden stems for balanced vertical presence.';
     detailPhrase = 'authentic zoological brushwork, subtle natural texture, and fine sepia ink contours';
   }
 
@@ -494,7 +496,7 @@ export function buildNaturalistIllustrationPrompt(params: {
       poseHint,
       `Expressive fine acrylic mural brushwork with layered matte mineral pigments, lush stylized native South American leaves and wildflowers gracefully framing the subject on a warm sun-kissed lime-plaster wall (#EFE7D8), subtle warm ochre solar halo, rich emerald, teal-forest, and terracotta accents.`,
       `Bold artistic painterly planes, crisp dark-charcoal illustrative contours, luminous gallery-quality hand-painted muralism — strictly painted artwork, NO raw photograph, NO camera bokeh, NO brick grid, NO digital filter look.`,
-      `Square 1:1 editorial composition with balanced breathing margins. Strictly NO text, NO typography, NO graffiti tags, NO Latin names, NO labels, NO frames, NO signatures, NO watermarks.`,
+      `Square 1:1 editorial composition filling ~82% of the frame with balanced breathing margins. Strictly NO text, NO typography, NO graffiti tags, NO Latin names, NO labels, NO frames, NO signatures, NO watermarks.`,
     ].join(' ');
   }
 
@@ -503,9 +505,9 @@ export function buildNaturalistIllustrationPrompt(params: {
       `Museum-grade 19th-century ${discipline} botanical watercolor plate of ${params.scientificName} (${params.commonNameAr}, ${taxonContext}), in the timeless tradition of John James Audubon and classic naturalist folios.`,
       `Strict species-accurate anatomy, proportions, and exact natural coloration: ${params.identificationTraits}.`,
       poseHint,
-      `Isolated subject gracefully centered on completely clean, empty, unblemished warm ivory cold-press cotton watercolor paper (#FAF6E9) — NO scenery, NO sky, NO forest background, NO photo bokeh.`,
-      `Delicate luminous translucent watercolor washes, crisp hand-drawn dark sepia dip-pen ink outlines, ${detailPhrase}, subtle organic paper grain, authentic vintage naturalist field-plate artistry.`,
-      `Square 1:1 composition with generous clean ivory paper margins. Strictly NO text, NO typography, NO Latin names, NO labels, NO frames, NO signatures, NO watermarks.`,
+      `Bold, large-scale close-up vignette where the animal and its graceful botanical perch/foliage fill 80% to 86% of the square 1:1 canvas both horizontally and vertically, leaving only slim ~8% clean warm ivory cold-press cotton watercolor paper margins (#FAF6E9) around the edges — NEVER tiny, distant, or floating in vast empty paper; NO full scenery, NO sky, NO forest background, NO photo bokeh.`,
+      `Delicate luminous translucent watercolor washes, crisp hand-drawn dark sepia dip-pen ink outlines, ${detailPhrase}, subtle organic paper grain, rich museum naturalist folio composition.`,
+      `Square 1:1 tight editorial framing with slim clean margins. Strictly NO text, NO typography, NO Latin names, NO labels, NO frames, NO signatures, NO watermarks.`,
     ].join(' ');
   }
 
@@ -513,9 +515,9 @@ export function buildNaturalistIllustrationPrompt(params: {
     `Museum-grade 19th-century ${discipline} zoological study drawn in graphite pencil (2H, 2B, 4B) of ${params.scientificName} (${params.commonNameAr}, ${taxonContext}).`,
     `Strict species-accurate anatomy, silhouette, and markings rendered in tonal values: ${params.identificationTraits}.`,
     poseHint,
-    `Isolated subject centered on completely clean, empty warm cream archival sketchbook paper (#F5F1E8) — NO scenery background, NO photo bokeh, NO color washes.`,
+    `Bold, large-scale close-up study where the animal and its finely drawn botanical branch/foliage fill 80% to 86% of the square 1:1 canvas both horizontally and vertically, leaving only slim ~8% clean warm cream archival sketchbook paper margins (#F5F1E8) around the edges — NEVER tiny, distant, or lost in huge empty space; NO scenery background, NO photo bokeh, NO color washes.`,
     `Strictly monochrome graphite pencil drawing with delicate fine cross-hatching, luminous soft pencil shading, sharp anatomical contour lines, authentic naturalist sketchbook illustration.`,
-    `Square 1:1 composition with generous clean archival paper margins. Strictly NO text, NO typography, NO labels, NO frames, NO signatures, NO watermarks.`,
+    `Square 1:1 tight editorial framing with slim clean margins. Strictly NO text, NO typography, NO labels, NO frames, NO signatures, NO watermarks.`,
   ].join(' ');
 }
 

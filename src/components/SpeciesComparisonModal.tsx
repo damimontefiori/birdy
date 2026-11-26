@@ -13,6 +13,7 @@ import {
   SpeciesReferencePhoto,
 } from '../types/domain';
 import { LightboxItem } from './ImageLightbox';
+import { SpeciesSoundPlayer } from './SpeciesSoundPlayer';
 
 interface SpeciesComparisonModalProps {
   userPhotoUrl: string;
@@ -232,7 +233,16 @@ export const SpeciesComparisonModal: React.FC<SpeciesComparisonModalProps> = ({
           <div className="compare-credit">Foto de referencia: {activeRefPhoto.attribution}</div>
         )}
 
-        {/* Resumen acotado + lista rápida de rasgos clave */}
+        {/* Resumen acotado + sonido de referencia + lista rápida de rasgos clave */}
+        <div style={{ marginBottom: 10 }}>
+          <SpeciesSoundPlayer
+            scientificName={species.scientificName}
+            commonNameAr={species.commonNameAr}
+            organismGroup={getSpeciesGroup(catalogMatch)}
+            compact
+          />
+        </div>
+
         <div className="compare-traits-card">
           {(catalogMatch.quickSummary || candidate?.reasoning) && (
             <p className="compare-summary-text">

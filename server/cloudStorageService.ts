@@ -289,6 +289,63 @@ export async function uploadDataUrlToR2(params: {
   };
 }
 
+export async function uploadRawBufferToR2(params: {
+  keyPrefix: string;
+  buffer: Buffer;
+  mimeType: string;
+  env?: ServerEnv;
+}): Promise<{ url: string; key: string } | null> {
+  const config = parseCloudflareR2Config(params.env);
+  if (!config || params.buffer.length === 0) return null;
+
+  const mime = params.mimeType.toLowerCase().trim();
+  const ext = mime.includes('webm')
+    ? 'webm'
+    : mime.includes('quicktime') || mime.includes('mov')
+      ? 'mov'
+      : mime.includes('mp4') || mime.includes('m4v')
+        ? 'mp4'
+        : mime.includes('mpeg') || mime.includes('mp3')
+          ? 'mp3'
+          : mime.includes('wav')
+            ? 'wav'
+            : mime.includes('png')
+              ? 'png'
+              : 'bin';
+
+  const cleanPrefix = params.keyPrefix
+    .replace(/^\/+/, '')
+    .replace(/\.(mp4|webm|mov|m4v|mp3|wav|jpg|jpeg|png|bin)$/i, '');
+  const key = `${cleanPrefix}.${ext}`;
+  if (!isValidMediaObjectKey(key)) return null;
+
+  const signed = buildR2SignedRequest({
+    method: 'PUT',
+    key,
+    body: params.buffer,
+    contentType: mime || 'application/octet-stream',
+    cacheControl: 'public, max-age=31536000, immutable',
+    config,
+  });
+
+  const res = await serverFetch(signed.url, {
+    method: 'PUT',
+    headers: signed.headers,
+    body: params.buffer,
+    signal: AbortSignal.timeout(45000),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`R2_RAW_UPLOAD_FAILED (${res.status}): ${errText.slice(0, 180)}`);
+  }
+
+  return {
+    key,
+    url: resolveR2ObjectUrl(key, config),
+  };
+}
+
 export async function fetchObjectFromR2(
   key: string,
   env: ServerEnv = resolveServerEnv()
